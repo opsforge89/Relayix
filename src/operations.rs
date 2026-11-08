@@ -103,8 +103,13 @@ pub async fn attempts(
 
 async fn claim(s: &AppState) -> Result<Option<(Uuid, i32, Uuid, i32, Value)>> {
     let mut tx = s.db.begin().await?;
+    let Some(channel) =
+        lease::claim_channel(&mut tx, lease::Queue::Delivery, s.channel_concurrency).await?
+    else {
+        return Ok(None);
+    };
     let row:Option<(Uuid,i32,Uuid,i32,Value)>=sqlx::query_as(
-  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE (d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes') ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     if let Some((id, _, _, number, _)) = &row {
         sqlx::query("UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Worker lease expired; outcome unknown' WHERE delivery_id=$1 AND status='processing'").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE deliveries SET status='processing',locked_at=NOW(),attempts=attempts+1,cycle_attempts=cycle_attempts+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;

@@ -16,7 +16,7 @@ Install Git, Docker Engine with Docker Compose v2, and Python 3.10+. Your user m
 git clone https://github.com/opsforge89/Relayix.git
 cd Relayix
 docker compose version
-docker pull ghcr.io/opsforge89/relayix:0.8.6
+docker pull ghcr.io/opsforge89/relayix:0.8.7
 ```
 
 This guide is for existing installations and automated deployments that use the private JSON wrapper. New users should follow the [standard Docker Compose setup](DEPLOYMENT.md). The published image is ready to run; source compilation is only needed for development.
@@ -167,6 +167,7 @@ The database helper runs an ephemeral PostgreSQL client only when you explicitly
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Bootstrap administrator; used when creating the account |
 | `ADMIN_TOKEN` | Optional administrator API token; generated automatically |
 | `RELAYIX_NETWORK_SUBNET` / `RELAYIX_NETWORK_GATEWAY` | Stable Compose bridge, defaults `172.30.84.0/24` / `172.30.84.1`; choose a separate non-overlapping pair per installation |
+| `DELIVERY_CHANNEL_CONCURRENCY` | Active attempts per channel across both queues/replicas, default 2, range 1–32; set consistently on all replicas |
 | `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Webhook quota per client per minute across routes, default 600, range 1–1,000,000 |
 | `TRUSTED_PROXIES` | IPs/CIDRs allowed to supply X-Forwarded-For; Compose defaults to its fixed bridge gateway, direct launches default to empty; /0 rejected ([details](DEPLOYMENT.md#trusted-reverse-proxies-084)) |
 | `COOKIE_SECURE` | `true` behind HTTPS; `false` for direct HTTP |

@@ -58,6 +58,7 @@ struct AppState {
     secure_cookies: bool,
     dummy_password_hash: Arc<String>,
     retry_seconds: i32,
+    channel_concurrency: i64,
 }
 type ApiResult<T> = std::result::Result<Json<T>, (StatusCode, Json<Value>)>;
 fn err(code: StatusCode, msg: impl ToString) -> (StatusCode, Json<Value>) {
@@ -201,6 +202,7 @@ async fn main() -> Result<()> {
     let webhook_limit = runtime::setting("WEBHOOK_RATE_LIMIT_PER_MINUTE", 600, 1, 1_000_000)?;
     let policy = network::policy()?;
     let worker_count = runtime::setting("DELIVERY_WORKERS", 4, 1, 32)?;
+    let channel_concurrency = runtime::setting("DELIVERY_CHANNEL_CONCURRENCY", 2, 1, 32)?;
     let retention_days = runtime::setting("EVENT_RETENTION_DAYS", 30, 0, 3650)?;
     let db = database::connect().await?;
     sqlx::migrate!().run(&db).await.map_err(|_|anyhow!("Database migration failed; check schema permissions, migration history and database server logs"))?;
@@ -219,6 +221,7 @@ async fn main() -> Result<()> {
         allow_http: env::var("ALLOW_INSECURE_HTTP").unwrap_or_default() == "true",
         secure_cookies: env::var("COOKIE_SECURE").unwrap_or_default() == "true",
         dummy_password_hash,
+        channel_concurrency: i64::from(channel_concurrency),
         retry_seconds: env::var("RETRY_BASE_SECONDS")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())

@@ -6,6 +6,27 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::sync::Mutex;
+use std::time::Instant;
+
+fn warning_due(last: &mut Option<Instant>, now: Instant) -> bool {
+    if last.is_some_and(|previous| now.duration_since(previous) < Duration::from_secs(60)) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
+fn warn_untrusted_forwarding(peer: IpAddr) {
+    static LAST_WARNING: Mutex<Option<Instant>> = Mutex::new(None);
+    if LAST_WARNING
+        .lock()
+        .map(|mut last| warning_due(&mut last, Instant::now()))
+        .unwrap_or(false)
+    {
+        tracing::warn!(peer_ip=%peer, "Ignoring X-Forwarded-For from an untrusted peer; check TRUSTED_PROXIES and the current Docker bridge gateway. Further warnings are suppressed for 60 seconds");
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClientIp(pub IpAddr);
@@ -134,6 +155,10 @@ pub async fn resolve(
         )
         .into_response();
     };
+    if request.headers().contains_key("x-forwarded-for") && !proxies.contains(peer) {
+        // Never log client-controlled forwarding contents or allocate per-peer log state.
+        warn_untrusted_forwarding(peer);
+    }
     match proxies.client(peer, request.headers()) {
         Ok(client) => {
             tracing::debug!(peer_ip=%peer,client_ip=%client.0,"request client address");
@@ -154,6 +179,15 @@ mod tests {
     }
     fn ip(value: &str) -> IpAddr {
         value.parse().unwrap()
+    }
+    #[test]
+    fn untrusted_forwarding_warnings_have_a_fixed_bounded_window() {
+        let now = Instant::now();
+        let mut last = None;
+        assert!(warning_due(&mut last, now));
+        assert!(!warning_due(&mut last, now + Duration::from_secs(59)));
+        assert!(warning_due(&mut last, now + Duration::from_secs(60)));
+        assert!(!warning_due(&mut last, now + Duration::from_secs(61)));
     }
     #[test]
     fn forwarded_headers_require_a_trusted_peer() {

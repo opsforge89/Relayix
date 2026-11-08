@@ -3,11 +3,19 @@ on:
   workflow_call:
     inputs:
       source_ref:
-        description: Release ref to verify before the production image build
+        description: Exact commit to build once and verify before promotion
         required: true
         type: string
+    outputs:
+      image_ref:
+        value: ${{ jobs.verify.outputs.image_ref }}
+      image:
+        value: ${{ jobs.verify.outputs.image }}
+      version:
+        value: ${{ jobs.verify.outputs.version }}
 permissions:
   contents: read
+  packages: write
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,6 +23,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    outputs:
+      image_ref: ${{ steps.candidate.outputs.image_ref }}
+      image: ${{ steps.candidate.outputs.image }}
+      version: ${{ steps.candidate.outputs.version }}
     env:
       RELAYIX_TEST_IMAGE: relayix:ci
       RELAYIX_TEST_ARTIFACTS: /tmp/relayix-ci-artifacts
@@ -36,16 +48,35 @@ jobs:
       - name: Deployment backup and rollback tests (fake Docker)
         run: python3 tests/deploy.py
       - uses: docker/setup-buildx-action@v4
-      - name: Build verification runtime and run Rust/frontend checks
-        uses: docker/build-push-action@v7
+      - uses: docker/login-action@v4
         with:
-          context: .
-          target: verified
-          pull: true
-          load: true
-          tags: relayix:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare candidate metadata
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 scripts/check_release.py
+          python3 - <<'PYTHON'
+          import os, subprocess, tomllib
+          version = tomllib.load(open('Cargo.toml', 'rb'))['package']['version']
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('VERSION=' + version + '\n')
+              output.write('IMAGE=ghcr.io/' + os.environ['REPOSITORY'].lower() + '\n')
+              output.write('REVISION=' + subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() + '\n')
+              output.write('REPOSITORY=' + os.environ['REPOSITORY'] + '\n')
+          PYTHON
+      - name: Build the candidate and verification targets together
+        run: docker buildx bake --file docker-bake.hcl --metadata-file /tmp/relayix-build.json
+      - name: Pin the production candidate for all runtime tests
+        id: candidate
+        run: |
+          python3 scripts/pin_candidate.py /tmp/relayix-build.json
+          image_ref=$(cat /tmp/relayix-candidate-ref)
+          docker pull "$image_ref"
+          docker tag "$image_ref" relayix:ci
+          python3 tests/candidate_image.py
       - name: Audit Rust dependencies
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src rust:1.99.1-trixie sh -c 'cargo install cargo-audit --version 0.22.2 --locked && cargo audit'

@@ -453,7 +453,12 @@ async fn schedule(s: &AppState) -> Result<()> {
 
 async fn send_next(s: &AppState) -> Result<bool> {
     let mut tx = s.db.begin().await?;
-    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE (status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+    let Some(channel) =
+        lease::claim_channel(&mut tx, lease::Queue::Alert, s.channel_concurrency).await?
+    else {
+        return Ok(false);
+    };
+    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND ((status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     let Some((id, cid, title, message, number)) = row else {
         return Ok(false);
     };

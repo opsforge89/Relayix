@@ -25,6 +25,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
 assert codes.count(401)==1 and codes.count(429)==7,codes
 admin=urllib.request.Request(BASE+'/api/auth/login',data=json.dumps({'username':'admin','password':os.environ['ADMIN_PASSWORD']}).encode(),headers={'Content-Type':'application/json','X-Relay-Client':'web','X-Forwarded-For':'203.0.113.60'})
 with urllib.request.urlopen(admin,timeout=15) as response:assert response.status==200
+recovery=urllib.request.Request(BASE+'/api/channels',headers={'Authorization':'Bearer '+os.environ['ADMIN_TOKEN']})
+with urllib.request.urlopen(recovery,timeout=15) as response:assert response.status==200
 # Rejections do not push the gate out: a valid password succeeds in the next slot.
 time.sleep(2.1)
 assert request('203.0.113.50',os.environ['ADMIN_PASSWORD'])==200
