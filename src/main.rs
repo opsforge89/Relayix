@@ -1,7 +1,7 @@
 mod channel_api;
 mod channel_config;
-mod config_transfer;
 mod client_ip;
+mod config_transfer;
 mod delivery_api;
 mod lease;
 mod route_api;
@@ -16,7 +16,6 @@ mod delivery_groups;
 mod diagnostics;
 mod mattermost;
 mod message;
-mod webhook_body;
 mod network;
 mod operations;
 mod payload_rules;
@@ -30,6 +29,7 @@ mod telegram;
 mod templates;
 #[cfg(test)]
 mod tests;
+mod webhook_body;
 use anyhow::{anyhow, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -274,7 +274,10 @@ async fn main() -> Result<()> {
         .route("/alert-deliveries", get(alerts::history))
         .route("/alert-deliveries/{id}/retry", post(alerts::retry))
         .route("/config/export", get(config_transfer::export))
-        .route("/config/import", post(config_transfer::import).layer(DefaultBodyLimit::max(config_transfer::MAX_BYTES)))
+        .route(
+            "/config/import",
+            post(config_transfer::import).layer(DefaultBodyLimit::max(config_transfer::MAX_BYTES)),
+        )
         .route("/channels", get(channels).post(create_channel))
         .route("/channels/diagnose", post(diagnostics::draft))
         .route("/stats", get(stats))

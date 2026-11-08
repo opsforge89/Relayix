@@ -303,7 +303,12 @@ async fn send_inner(
                 ("message", message),
             ]),
         Config::Discord { url } => client.post(url).json(&json!({"content":text})),
-        Config::Webhook { url } => client.post(url).json(&webhook_body::render(cfg.get("body_template"), title, message, priority)?),
+        Config::Webhook { url } => client.post(url).json(&webhook_body::render(
+            cfg.get("body_template"),
+            title,
+            message,
+            priority,
+        )?),
         Config::Mattermost { url }
         | Config::Slack { url }
         | Config::Teams { url }

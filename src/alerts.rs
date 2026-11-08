@@ -453,7 +453,14 @@ async fn schedule(s: &AppState) -> Result<()> {
 
 async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
     let mut tx = s.db.begin().await?;
-    let channel = match lease::claim_channel(&mut tx, lease::Queue::Alert, s.channel_concurrency, s.proxy_concurrency).await? {
+    let channel = match lease::claim_channel(
+        &mut tx,
+        lease::Queue::Alert,
+        s.channel_concurrency,
+        s.proxy_concurrency,
+    )
+    .await?
+    {
         lease::Claim::Ready(channel) => channel,
         lease::Claim::Idle => return Ok(lease::Claim::Idle),
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
@@ -512,7 +519,9 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
         }
         match send_next(&s).await {
             Ok(lease::Claim::Ready(())) => {}
-            Ok(lease::Claim::Contended) => runtime::pause(&mut stop, Duration::from_millis(20)).await,
+            Ok(lease::Claim::Contended) => {
+                runtime::pause(&mut stop, Duration::from_millis(20)).await
+            }
             Ok(lease::Claim::Idle) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
             Err(error) => {
                 tracing::error!(%error,"failure alert worker");

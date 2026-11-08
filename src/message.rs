@@ -247,10 +247,12 @@ fn utf16_len(text: &str) -> usize {
 }
 fn prefix(text: &str, units: usize) -> String {
     let mut used = 0;
-    text.chars().take_while(|ch| {
-        used += ch.len_utf16();
-        used <= units
-    }).collect()
+    text.chars()
+        .take_while(|ch| {
+            used += ch.len_utf16();
+            used <= units
+        })
+        .collect()
 }
 
 /// Truncate source text, then render again: never cut HTML tags or entities.
@@ -292,18 +294,34 @@ mod tests {
     #[test]
     fn provider_limits_preserve_unicode_and_valid_markup() {
         for kind in ["telegram", "discord"] {
-            let raw = format!("**{}** [link](https://example.org/path)", "<&😀".repeat(3000));
+            let raw = format!(
+                "**{}** [link](https://example.org/path)",
+                "<&😀".repeat(3000)
+            );
             let rendered = render(kind, &json!({}), "Long title", &raw);
-            assert!(utf16_len(&rendered.text) <= if kind == "telegram" {4096} else {2000});
+            assert!(utf16_len(&rendered.text) <= if kind == "telegram" { 4096 } else { 2000 });
             assert!(rendered.text.ends_with("[Message truncated]"));
-            assert_eq!(rendered.text.matches("<b>").count(), rendered.text.matches("</b>").count());
-            assert_eq!(rendered.text.matches("<a ").count(), rendered.text.matches("</a>").count());
+            assert_eq!(
+                rendered.text.matches("<b>").count(),
+                rendered.text.matches("</b>").count()
+            );
+            assert_eq!(
+                rendered.text.matches("<a ").count(),
+                rendered.text.matches("</a>").count()
+            );
             assert!(raw.len() > 10000);
         }
         let exact = "a".repeat(2000);
         assert_eq!(render("discord", &json!({}), "", &exact).text, exact);
-        assert!(!render("smtp", &json!({}), "", &"x".repeat(10000)).text.contains("[Message truncated]"));
-        assert!(render("telegram", &json!({}), &"&".repeat(6000), "").text.len() <= 4096);
+        assert!(!render("smtp", &json!({}), "", &"x".repeat(10000))
+            .text
+            .contains("[Message truncated]"));
+        assert!(
+            render("telegram", &json!({}), &"&".repeat(6000), "")
+                .text
+                .len()
+                <= 4096
+        );
     }
     #[test]
     fn absent_titles_and_legacy_modes() {

@@ -20,10 +20,16 @@ pub enum Claim<T> {
     Idle,
     Contended,
 }
-const PROXIED: &str = "c.kind='telegram' AND COALESCE(c.config->>'proxy_type','none') IN ('mtproto','webproxy')";
+const PROXIED: &str =
+    "c.kind='telegram' AND COALESCE(c.config->>'proxy_type','none') IN ('mtproto','webproxy')";
 const ACTIVE: &str = "(SELECT COUNT(*) FROM deliveries d WHERE d.channel_id=c.id AND d.status='processing' AND d.locked_at>=NOW()-INTERVAL '2 minutes') + (SELECT COUNT(*) FROM alert_deliveries a WHERE a.channel_id=c.id AND a.status='processing' AND a.locked_at>=NOW()-INTERVAL '2 minutes')";
 const PROXY_ACTIVE: &str = "(SELECT COUNT(*) FROM deliveries d JOIN channels p ON p.id=d.channel_id WHERE d.status='processing' AND d.locked_at>=NOW()-INTERVAL '2 minutes' AND p.kind='telegram' AND COALESCE(p.config->>'proxy_type','none') IN ('mtproto','webproxy')) + (SELECT COUNT(*) FROM alert_deliveries a JOIN channels p ON p.id=a.channel_id WHERE a.status='processing' AND a.locked_at>=NOW()-INTERVAL '2 minutes' AND p.kind='telegram' AND COALESCE(p.config->>'proxy_type','none') IN ('mtproto','webproxy'))";
-fn candidate(queue: Queue, limit: i64, proxy_limit: i64, lock: bool) -> sqlx::QueryBuilder<'static, sqlx::Postgres> {
+fn candidate(
+    queue: Queue,
+    limit: i64,
+    proxy_limit: i64,
+    lock: bool,
+) -> sqlx::QueryBuilder<'static, sqlx::Postgres> {
     let table = match queue {
         Queue::Delivery => "deliveries",
         Queue::Alert => "alert_deliveries",
@@ -49,17 +55,26 @@ pub async fn claim_channel(
     proxy_limit: i64,
 ) -> Result<Claim<Uuid>> {
     let row: Option<(Uuid, bool)> = candidate(queue, limit, proxy_limit, true)
-        .build_query_as().fetch_optional(&mut **tx).await?;
+        .build_query_as()
+        .fetch_optional(&mut **tx)
+        .await?;
     let Some((channel, proxied)) = row else {
         let available: Option<(Uuid, bool)> = candidate(queue, limit, proxy_limit, false)
-            .build_query_as().fetch_optional(&mut **tx).await?;
-        return Ok(if available.is_some() { Claim::Contended } else { Claim::Idle });
+            .build_query_as()
+            .fetch_optional(&mut **tx)
+            .await?;
+        return Ok(if available.is_some() {
+            Claim::Contended
+        } else {
+            Claim::Idle
+        });
     };
     if proxied {
         // Different proxy channels share this nonblocking transaction lock. Normal
         // channels never acquire it, so they can claim while proxy capacity is busy.
         let owned: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(914028)")
-            .fetch_one(&mut **tx).await?;
+            .fetch_one(&mut **tx)
+            .await?;
         if !owned {
             return Ok(Claim::Contended);
         }
@@ -68,11 +83,21 @@ pub async fn claim_channel(
     let mut capacity = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT (");
     capacity.push(ACTIVE).push(") < ").push_bind(limit);
     if proxied {
-        capacity.push(" AND (").push(PROXY_ACTIVE).push(") < ").push_bind(proxy_limit);
+        capacity
+            .push(" AND (")
+            .push(PROXY_ACTIVE)
+            .push(") < ")
+            .push_bind(proxy_limit);
     }
-    capacity.push(" FROM channels c WHERE c.id=").push_bind(channel);
+    capacity
+        .push(" FROM channels c WHERE c.id=")
+        .push_bind(channel);
     let capacity: bool = capacity.build_query_scalar().fetch_one(&mut **tx).await?;
-    Ok(if capacity { Claim::Ready(channel) } else { Claim::Contended })
+    Ok(if capacity {
+        Claim::Ready(channel)
+    } else {
+        Claim::Contended
+    })
 }
 
 async fn renew(db: &PgPool, queue: Queue, id: Uuid, number: i32) -> Result<()> {

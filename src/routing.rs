@@ -299,7 +299,10 @@ async fn enqueue(
         let admitted: Option<Uuid> = sqlx::query_scalar("INSERT INTO route_rate_windows(route_id) VALUES($1) ON CONFLICT(route_id) DO UPDATE SET window_started_at=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN NOW() ELSE route_rate_windows.window_started_at END,requests=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN 1 ELSE route_rate_windows.requests+1 END WHERE route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' OR route_rate_windows.requests<$2 RETURNING route_id")
             .bind(endpoint.id).bind(endpoint.rate_limit_per_minute).fetch_optional(&mut *tx).await.map_err(db_error)?;
         if admitted.is_none() {
-            return Err(err(StatusCode::TOO_MANY_REQUESTS, "Route rate exceeded; retry in 60 seconds"));
+            return Err(err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Route rate exceeded; retry in 60 seconds",
+            ));
         }
     }
     let event_id = Uuid::new_v4();
@@ -356,9 +359,13 @@ pub async fn ingest(
     Json(payload): Json<Value>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let mut response = ingest_inner(State(s), Path(slug), headers, Json(payload)).await.into_response();
+    let mut response = ingest_inner(State(s), Path(slug), headers, Json(payload))
+        .await
+        .into_response();
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
-        response.headers_mut().insert("retry-after", axum::http::HeaderValue::from_static("60"));
+        response
+            .headers_mut()
+            .insert("retry-after", axum::http::HeaderValue::from_static("60"));
     }
     response
 }

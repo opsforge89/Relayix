@@ -103,7 +103,14 @@ pub async fn attempts(
 
 async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value)>> {
     let mut tx = s.db.begin().await?;
-    let channel = match lease::claim_channel(&mut tx, lease::Queue::Delivery, s.channel_concurrency, s.proxy_concurrency).await? {
+    let channel = match lease::claim_channel(
+        &mut tx,
+        lease::Queue::Delivery,
+        s.channel_concurrency,
+        s.proxy_concurrency,
+    )
+    .await?
+    {
         lease::Claim::Ready(channel) => channel,
         lease::Claim::Idle => return Ok(lease::Claim::Idle),
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
@@ -202,7 +209,9 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
                     runtime::pause(&mut stop, Duration::from_secs(3)).await;
                 }
             }
-            Ok(lease::Claim::Contended) => runtime::pause(&mut stop, Duration::from_millis(20)).await,
+            Ok(lease::Claim::Contended) => {
+                runtime::pause(&mut stop, Duration::from_millis(20)).await
+            }
             Ok(lease::Claim::Idle) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
             Err(e) => {
                 tracing::warn!(%e,"worker poll error");

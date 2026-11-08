@@ -68,7 +68,10 @@ pub(crate) fn generated_slug(name: &str, id: Uuid) -> String {
 }
 pub(crate) fn valid_route(input: &RouteInput) -> Result<()> {
     payload_rules::validate_rules(&input.payload_rules)?;
-    if input.rate_limit_per_minute.is_some_and(|n| !(0..=1_000_000).contains(&n)) {
+    if input
+        .rate_limit_per_minute
+        .is_some_and(|n| !(0..=1_000_000).contains(&n))
+    {
         return Err(anyhow!("Route rate limit must be between 0 and 1000000"));
     }
     if input

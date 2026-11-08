@@ -96,7 +96,7 @@ function WebhookBodyField({draft,setDraft}) {
    setDraft({...draft,config,body_template_error:''});
   }catch(e){setDraft({...draft,body_template_error:e.message})}
  };
- return <><label htmlFor="webhook-body-template">JSON body template (optional)</label><textarea id="webhook-body-template" rows={8} maxLength={16384} value={text} onChange={e=>change(e.target.value)} placeholder={'{"text":"{{message}}","title":"{{title}}","priority":"{{priority}}"}'}/><p className="helptext">Leave empty for the standard payload. Variables: {'{{title}}'}, {'{{message}}'}, {'{{priority}}'}, {'{{source}}' in JSON values. A whole-value priority variable stays numeric. Maximum template size: 16 KiB. Do not put credentials in body templates; they are visible to authenticated users and excluded from configuration exports.</p>{draft.body_template_error&&<p className="field-error">{draft.body_template_error}</p>}</>;
+ return <><label htmlFor="webhook-body-template">JSON body template (optional)</label><textarea id="webhook-body-template" rows={8} maxLength={16384} value={text} onChange={e=>change(e.target.value)} placeholder={'{"text":"{{message}}","title":"{{title}}","priority":"{{priority}}"}'}/><p className="helptext">Leave empty for the standard payload. Variables: {'{{title}}'}, {'{{message}}'}, {'{{priority}}'}, {'{{source}}'} in JSON values. A whole-value priority variable stays numeric. Maximum template size: 16 KiB. Do not put credentials in body templates; they are visible to authenticated users and excluded from configuration exports.</p>{draft.body_template_error&&<p className="field-error">{draft.body_template_error}</p>}</>;
 }
 
 export function ChannelFields({draft,setDraft}) {
