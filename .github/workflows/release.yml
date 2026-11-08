@@ -96,7 +96,7 @@ jobs:
         run: |
           skopeo copy --all --preserve-digests --dest-authfile "$HOME/.docker/config.json" \
             --digestfile /tmp/relayix-promoted-digest \
-            oci-archive:/tmp/relayix-promote/relayix-candidate.tar "docker://$IMAGE:sha-$REVISION"
+            oci-archive:/tmp/relayix-promote/relayix-candidate.tar:candidate "docker://$IMAGE:sha-$REVISION"
           expected="${IMAGE_REF##*@}"
           actual=$(cat /tmp/relayix-promoted-digest)
           [[ "$actual" == "$expected" ]]

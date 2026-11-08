@@ -65,3 +65,5 @@ jobs:
         working-directory: web
       - name: Python helper syntax
         run: python3 -m compileall --quiet scripts tests
+      - name: OCI packaging unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'

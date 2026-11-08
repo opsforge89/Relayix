@@ -76,9 +76,10 @@ jobs:
       - name: Pin the production candidate for all runtime tests
         id: candidate
         run: |
+          python3 scripts/oci_candidate.py /tmp/relayix-candidate.tar /tmp/relayix-build.json
           python3 scripts/pin_candidate.py /tmp/relayix-build.json
           skopeo copy --override-os linux --override-arch amd64 \
-            oci-archive:/tmp/relayix-candidate.tar docker-daemon:relayix:ci
+            oci-archive:/tmp/relayix-candidate.tar:candidate docker-daemon:relayix:ci
           python3 tests/candidate_image.py
       - name: Audit Rust dependencies
         run: |
