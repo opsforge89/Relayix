@@ -122,8 +122,20 @@ pub async fn send_smtp(cfg: &Value, title: &str, body: &str) -> Result<()> {
         .await
         .map_err(|_| anyhow!("SMTP delivery timed out"))?
         .map_err(|error| {
-            let authentication = error.status().is_some_and(|code| matches!(code.to_string().as_str(), "534" | "535"));
-            crate::retry_policy::transport(if authentication {"authentication"} else if error.is_permanent() {"destination"} else {"temporary"}, error.is_permanent(), None)
+            let authentication = error
+                .status()
+                .is_some_and(|code| matches!(code.to_string().as_str(), "534" | "535"));
+            crate::retry_policy::transport(
+                if authentication {
+                    "authentication"
+                } else if error.is_permanent() {
+                    "destination"
+                } else {
+                    "temporary"
+                },
+                error.is_permanent(),
+                None,
+            )
         })?;
     Ok(())
 }
@@ -209,7 +221,7 @@ pub async fn send_matrix(
         .map_err(|e| anyhow!(e.without_url()))?;
     if encryption.status().is_success() {
         return Err(crate::retry_policy::permanent(
-            "Encrypted Matrix rooms are not supported; use a room with encryption disabled"
+            "Encrypted Matrix rooms are not supported; use a room with encryption disabled",
         ));
     }
     if encryption.status() != reqwest::StatusCode::NOT_FOUND {

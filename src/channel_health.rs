@@ -3,7 +3,9 @@ use crate::*;
 
 pub async fn lock(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, channel: Uuid) -> Result<()> {
     sqlx::query("SELECT id FROM channels WHERE id=$1 FOR UPDATE")
-        .bind(channel).fetch_optional(&mut **tx).await?;
+        .bind(channel)
+        .fetch_optional(&mut **tx)
+        .await?;
     Ok(())
 }
 /// Called only after the queue's attempt fence has confirmed ownership, with its channel locked.

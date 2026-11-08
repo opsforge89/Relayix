@@ -1,11 +1,11 @@
 mod channel_api;
-mod channel_health;
-mod retry_policy;
 mod channel_config;
+mod channel_health;
 mod client_ip;
 mod config_transfer;
 mod delivery_api;
 mod lease;
+mod retry_policy;
 mod route_api;
 use channel_api::*;
 use delivery_api::*;

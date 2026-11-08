@@ -96,7 +96,9 @@ pub async fn attempts(
     let (total, status, is_fallback, error, next_attempt_at, channel_id, error_category) =
         delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
     let items:Vec<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('number',number,'started_at',started_at,'finished_at',finished_at,'status',status,'error',error,'error_category',error_category) FROM delivery_attempts WHERE delivery_id=$1 ORDER BY number DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db_error)?;
-    let health = channel_health::status(&s.db, channel_id).await.map_err(db_error)?;
+    let health = channel_health::status(&s.db, channel_id)
+        .await
+        .map_err(db_error)?;
     Ok(Json(
         json!({"next_attempt_at":if status=="queued" {Some(next_attempt_at)} else {None},"error":error,"error_category":error_category,"channel_health":health,"delivery_id":id,"attempts":total,"status":status,"is_fallback":is_fallback,"items":items.into_iter().map(|r|r.0).collect::<Vec<_>>(),"history_limit":100,"can_retry":status=="failed"||(status=="queued"&&error.is_some())}),
     ))
@@ -133,16 +135,27 @@ async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value
         None => lease::Claim::Contended,
     })
 }
-async fn finish(s: &AppState, id: Uuid, channel: Uuid, number: i32, result: Result<()>) -> Result<()> {
+async fn finish(
+    s: &AppState,
+    id: Uuid,
+    channel: Uuid,
+    number: i32,
+    result: Result<()>,
+) -> Result<()> {
     let mut tx = s.db.begin().await?;
     channel_health::lock(&mut tx, channel).await?;
     let row:Option<(Uuid,bool,i32)>=sqlx::query_as("SELECT event_id,is_fallback,cycle_attempts FROM deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE").bind(id).bind(number).fetch_optional(&mut *tx).await?;
     let Some((event_id, is_fallback, cycle_attempts)) = row else {
         return Ok(());
     };
-    let plan = result.as_ref().err().map(|e| retry_policy::plan(e, cycle_attempts, s.retry_seconds));
+    let plan = result
+        .as_ref()
+        .err()
+        .map(|e| retry_policy::plan(e, cycle_attempts, s.retry_seconds));
     channel_health::record(&mut tx, channel, &result, cycle_attempts, s.retry_seconds).await?;
-    let error = result.err().map(|e| e.to_string().chars().take(512).collect::<String>());
+    let error = result
+        .err()
+        .map(|e| e.to_string().chars().take(512).collect::<String>());
     let status = if error.is_none() {
         "sent"
     } else if cycle_attempts >= 5 || plan.as_ref().is_some_and(|p| p.permanent) {

@@ -370,18 +370,37 @@ pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
 }
 
 /// Describe exactly the presentation used by the send adapter, without destination credentials.
-pub fn preview(kind: &str, cfg: &Value, title: &str, body: &str, priority: i32, admin: bool) -> Result<Value> {
+pub fn preview(
+    kind: &str,
+    cfg: &Value,
+    title: &str,
+    body: &str,
+    priority: i32,
+    admin: bool,
+) -> Result<Value> {
     if kind == "webhook" && has_body_template(cfg) && !admin {
-        return Ok(json!({"restricted":true,"reason":"Administrator required to preview a custom webhook body"}));
+        return Ok(
+            json!({"restricted":true,"reason":"Administrator required to preview a custom webhook body"}),
+        );
     }
     let rendered = render(kind, cfg, title, body);
     let original = render_unbounded(kind, title, body);
-    let truncated = rendered.text != original.text || rendered.title != original.title || rendered.body != original.body;
+    let truncated = rendered.text != original.text
+        || rendered.title != original.title
+        || rendered.body != original.body;
     let limits = match kind {
-        "telegram" | "discord" | "rocket_chat" => json!([{"field":"Combined text","used":utf16_len(&rendered.text),"maximum":match kind {"telegram"=>4096,"discord"=>2000,_=>5000},"unit":"UTF-16 units"}]),
-        "pushover" => json!([{"field":"Title","used":rendered.title.chars().count(),"maximum":250,"unit":"characters"},{"field":"Message","used":rendered.body.chars().count(),"maximum":1024,"unit":"characters"}]),
-        "ntfy" => json!([{"field":"Title","used":rendered.title.len(),"maximum":1024,"unit":"UTF-8 bytes"},{"field":"Message","used":rendered.body.len(),"maximum":4096,"unit":"UTF-8 bytes"}]),
-        "google_chat" => json!([{"field":"JSON payload","used":google_json_bytes(&rendered.text),"maximum":32000,"unit":"bytes"}]),
+        "telegram" | "discord" | "rocket_chat" => {
+            json!([{"field":"Combined text","used":utf16_len(&rendered.text),"maximum":match kind {"telegram"=>4096,"discord"=>2000,_=>5000},"unit":"UTF-16 units"}])
+        }
+        "pushover" => {
+            json!([{"field":"Title","used":rendered.title.chars().count(),"maximum":250,"unit":"characters"},{"field":"Message","used":rendered.body.chars().count(),"maximum":1024,"unit":"characters"}])
+        }
+        "ntfy" => {
+            json!([{"field":"Title","used":rendered.title.len(),"maximum":1024,"unit":"UTF-8 bytes"},{"field":"Message","used":rendered.body.len(),"maximum":4096,"unit":"UTF-8 bytes"}])
+        }
+        "google_chat" => {
+            json!([{"field":"JSON payload","used":google_json_bytes(&rendered.text),"maximum":32000,"unit":"bytes"}])
+        }
         _ => json!([]),
     };
     let mut value = json!({"text":rendered.text,"title":rendered.title,"body":rendered.body,"format":if kind=="telegram" {"html"} else if kind=="mattermost" {"markdown"} else {"plain"},"truncated":truncated,"limits":limits});
@@ -404,19 +423,50 @@ pub struct PreviewInput {
     #[serde(default = "preview_priority")]
     priority: i32,
 }
-fn preview_priority() -> i32 { 3 }
+fn preview_priority() -> i32 {
+    3
+}
 pub async fn preview_channel(
-    State(s): State<AppState>, h: HeaderMap, Json(input): Json<PreviewInput>,
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(input): Json<PreviewInput>,
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
-    if input.title.len()>256 || input.message.len()>10000 || !(1..=5).contains(&input.priority) {
-        return Err(err(StatusCode::BAD_REQUEST,"Use a title up to 256 bytes, message up to 10,000 bytes and priority 1–5"));
+    if input.title.len() > 256 || input.message.len() > 10000 || !(1..=5).contains(&input.priority)
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Use a title up to 256 bytes, message up to 10,000 bytes and priority 1–5",
+        ));
     }
-    if !matches!(input.kind.as_str(),"telegram"|"discord"|"rocket_chat"|"pushover"|"ntfy"|"google_chat"|"matrix"|"mattermost"|"slack"|"teams"|"gotify"|"smtp"|"webhook") {
-        return Err(err(StatusCode::BAD_REQUEST,"Unknown integration"));
+    if !matches!(
+        input.kind.as_str(),
+        "telegram"
+            | "discord"
+            | "rocket_chat"
+            | "pushover"
+            | "ntfy"
+            | "google_chat"
+            | "matrix"
+            | "mattermost"
+            | "slack"
+            | "teams"
+            | "gotify"
+            | "smtp"
+            | "webhook"
+    ) {
+        return Err(err(StatusCode::BAD_REQUEST, "Unknown integration"));
     }
-    preview(&input.kind,&input.config,&input.title,&input.message,input.priority,principal.role=="admin")
-        .map(Json).map_err(|e|err(StatusCode::BAD_REQUEST,e))
+    preview(
+        &input.kind,
+        &input.config,
+        &input.title,
+        &input.message,
+        input.priority,
+        principal.role == "admin",
+    )
+    .map(Json)
+    .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
 #[cfg(test)]
@@ -501,7 +551,16 @@ mod tests {
     #[test]
     fn previews_share_delivery_rendering_and_never_expose_credentials() {
         let config = json!({"url":"https://private.example.org", "bot_token":"private-token"});
-        for kind in ["telegram", "discord", "rocket_chat", "pushover", "ntfy", "google_chat", "matrix", "mattermost"] {
+        for kind in [
+            "telegram",
+            "discord",
+            "rocket_chat",
+            "pushover",
+            "ntfy",
+            "google_chat",
+            "matrix",
+            "mattermost",
+        ] {
             let body = "😀".repeat(2500);
             let preview = preview(kind, &config, "Title", &body, 3, false).unwrap();
             assert_eq!(preview["text"], render(kind, &config, "Title", &body).text);
@@ -512,10 +571,32 @@ mod tests {
             }
         }
         let custom = json!({"body_template":{"secret":"private-template", "text":"{{message}}"}});
-        assert_eq!(preview("webhook", &custom, "", "Body", 3, false).unwrap()["restricted"], true);
-        assert!(!preview("webhook", &custom, "", "Body", 3, false).unwrap().to_string().contains("private-template"));
-        assert!(preview("webhook", &custom, "", "Body", 3, true).unwrap()["text"].as_str().unwrap().contains("private-template"));
-        assert_eq!(preview("discord", &json!({}), "", "literal [Message truncated]", 3, false).unwrap()["truncated"], false);
+        assert_eq!(
+            preview("webhook", &custom, "", "Body", 3, false).unwrap()["restricted"],
+            true
+        );
+        assert!(!preview("webhook", &custom, "", "Body", 3, false)
+            .unwrap()
+            .to_string()
+            .contains("private-template"));
+        assert!(
+            preview("webhook", &custom, "", "Body", 3, true).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("private-template")
+        );
+        assert_eq!(
+            preview(
+                "discord",
+                &json!({}),
+                "",
+                "literal [Message truncated]",
+                3,
+                false
+            )
+            .unwrap()["truncated"],
+            false
+        );
     }
     #[test]
     fn absent_titles_and_legacy_modes() {

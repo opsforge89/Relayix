@@ -496,7 +496,9 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
     channel_health::lock(&mut tx, cid).await?;
     let owned: Option<Uuid> = sqlx::query_scalar("SELECT id FROM alert_deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE")
         .bind(id).bind(number).fetch_optional(&mut *tx).await?;
-    if owned.is_none() { return Ok(lease::Claim::Ready(())); }
+    if owned.is_none() {
+        return Ok(lease::Claim::Ready(()));
+    }
     match outcome {
         Ok(Outcome::Sent) => {
             channel_health::record(&mut tx, cid, &Ok(()), number, s.retry_seconds).await?;

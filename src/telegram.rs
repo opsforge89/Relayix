@@ -199,7 +199,13 @@ async fn transport_inner(
     match data["code"].as_str() {
         Some("credentials") => Err(retry_policy::transport("authentication", true, None)),
         Some("destination") => Err(retry_policy::transport("destination", true, None)),
-        Some("flood") => Err(retry_policy::transport("rate_limit", false, data["retry_after"].as_u64().map(|v| v.min(i32::MAX as u64) as i32))),
+        Some("flood") => Err(retry_policy::transport(
+            "rate_limit",
+            false,
+            data["retry_after"]
+                .as_u64()
+                .map(|v| v.min(i32::MAX as u64) as i32),
+        )),
         _ => Err(anyhow!(message)),
     }
 }

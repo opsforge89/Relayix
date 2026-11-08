@@ -113,13 +113,21 @@ pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResu
     }
     let health: Vec<(Uuid, Value)> = sqlx::query_as("SELECT channel_id,jsonb_build_object('consecutive_failures',consecutive_failures,'last_error',last_error,'paused_until',paused_until,'state',CASE WHEN paused_until>NOW() THEN 'paused' WHEN paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channel_health")
         .fetch_all(&s.db).await.map_err(db_error)?;
-    let health = health.into_iter().collect::<std::collections::HashMap<_,_>>();
-    Ok(Json(json!(result.into_iter().map(|c| {
-        let state = health.get(&c.id).cloned().unwrap_or_else(||json!({"state":"healthy","consecutive_failures":0}));
-        let mut c = json!(c);
-        c["health"] = state;
-        c
-    }).collect::<Vec<_>>())))
+    let health = health
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+    Ok(Json(json!(result
+        .into_iter()
+        .map(|c| {
+            let state = health
+                .get(&c.id)
+                .cloned()
+                .unwrap_or_else(|| json!({"state":"healthy","consecutive_failures":0}));
+            let mut c = json!(c);
+            c["health"] = state;
+            c
+        })
+        .collect::<Vec<_>>())))
 }
 pub(crate) fn mask(config: &mut Value) {
     for &key in providers::SECRET_FIELDS {
@@ -142,8 +150,10 @@ pub(crate) fn restore_masked(
             .chain(old.as_object())
             .flat_map(|fields| fields.keys())
             .filter(|key| {
-                matches!(key.as_str(), "url" | "host" | "port" | "tls" | "webproxy_address")
-                    || key.starts_with("proxy_")
+                matches!(
+                    key.as_str(),
+                    "url" | "host" | "port" | "tls" | "webproxy_address"
+                ) || key.starts_with("proxy_")
             })
             .any(|key| {
                 let value = config.get(key);
@@ -320,8 +330,9 @@ pub(crate) async fn send(
     delivery_id: Uuid,
 ) -> Result<()> {
     if c.kind == "telegram" && matches!(proxy::mode(&c.config), "mtproto" | "webproxy") {
-        valid_config(&c.kind, &c.config, allow_http)
-            .map_err(|_| retry_policy::permanent("Invalid channel configuration; update channel settings"))?;
+        valid_config(&c.kind, &c.config, allow_http).map_err(|_| {
+            retry_policy::permanent("Invalid channel configuration; update channel settings")
+        })?;
         let rendered = message::render(&c.kind, &c.config, title, message);
         // Telegram owns its deadline: capacity waits must not consume a transport attempt.
         return telegram::send(&c.config, &rendered.text, delivery_id, rendered.html).await;
@@ -344,8 +355,9 @@ async fn send_inner(
     delivery_id: Uuid,
 ) -> Result<()> {
     let cfg = &c.config;
-    valid_config(&c.kind, cfg, allow_http)
-        .map_err(|_| retry_policy::permanent("Invalid channel configuration; update channel settings"))?;
+    valid_config(&c.kind, cfg, allow_http).map_err(|_| {
+        retry_policy::permanent("Invalid channel configuration; update channel settings")
+    })?;
     network::validate(cfg).await?;
     let rendered = message::render(&c.kind, cfg, title, message);
     let text = rendered.text;
