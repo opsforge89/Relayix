@@ -17,7 +17,6 @@ jobs:
       source_ref: ${{ github.sha }}
     permissions:
       contents: read
-      packages: write
   publish:
     needs: verify
     runs-on: ubuntu-latest
@@ -79,13 +78,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v7
+        if: steps.release.outputs.publish == 'true'
+        with:
+          name: production-candidate-${{ github.sha }}
+          path: /tmp/relayix-promote
+      - name: Install OCI archive transport
+        if: steps.release.outputs.publish == 'true'
+        run: sudo apt-get update && sudo apt-get install -y skopeo
       - name: Promote the tested digest without rebuilding
         if: steps.release.outputs.publish == 'true'
         env:
           IMAGE_REF: ${{ needs.verify.outputs.image_ref }}
           IMAGE: ${{ needs.verify.outputs.image }}
           VERSION: ${{ needs.verify.outputs.version }}
+          REVISION: ${{ github.sha }}
         run: |
+          skopeo copy --all --preserve-digests --dest-authfile "$HOME/.docker/config.json" \
+            --digestfile /tmp/relayix-promoted-digest \
+            oci-archive:/tmp/relayix-promote/relayix-candidate.tar "docker://$IMAGE:sha-$REVISION"
+          expected="${IMAGE_REF##*@}"
+          actual=$(cat /tmp/relayix-promoted-digest)
+          [[ "$actual" == "$expected" ]]
           docker buildx imagetools create --prefer-index=false \
             --tag "$IMAGE:$VERSION" --tag "$IMAGE:beta" "$IMAGE_REF"
       - name: Publish standalone Compose downloads

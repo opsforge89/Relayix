@@ -1,4 +1,4 @@
-import React from 'react';
+import React,{useState} from 'react';
 import {Webhook, Plug} from 'lucide-react';
 
 export const groups = [
@@ -81,6 +81,24 @@ export function IntegrationCatalog({onSelect}) {
  </section>)}</div>;
 }
 
+function WebhookBodyField({draft,setDraft}) {
+ const [text,setText]=useState(()=>draft.config.body_template?JSON.stringify(draft.config.body_template,null,2):'');
+ const change=value=>{
+  setText(value);
+  try{
+   const config={...draft.config};
+   if(!value.trim())delete config.body_template;
+   else{
+    const parsed=JSON.parse(value);
+    if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('Use a JSON object for the webhook body.');
+    config.body_template=parsed;
+   }
+   setDraft({...draft,config,body_template_error:''});
+  }catch(e){setDraft({...draft,body_template_error:e.message})}
+ };
+ return <><label htmlFor="webhook-body-template">JSON body template (optional)</label><textarea id="webhook-body-template" rows={8} maxLength={16384} value={text} onChange={e=>change(e.target.value)} placeholder={'{"text":"{{message}}","title":"{{title}}","priority":"{{priority}}"}'}/><p className="helptext">Leave empty for the standard payload. Variables: {'{{title}}'}, {'{{message}}'}, {'{{priority}}'}, {'{{source}}' in JSON values. A whole-value priority variable stays numeric. Maximum template size: 16 KiB. Do not put credentials in body templates; they are visible to authenticated users and excluded from configuration exports.</p>{draft.body_template_error&&<p className="field-error">{draft.body_template_error}</p>}</>;
+}
+
 export function ChannelFields({draft,setDraft}) {
  const fields=fieldsFor(draft.kind,draft.config),advanced=field=>['api_id','api_hash'].includes(field.key);
  const renderField=field=><React.Fragment key={field.key}>
@@ -91,5 +109,5 @@ export function ChannelFields({draft,setDraft}) {
    value={draft.config[field.key]??field.value??''} maxLength={field.maxLength} required={!field.optional} min={field.type==='number'?1:undefined} max={field.type==='number'?(field.max||65535):undefined}
    placeholder={field.placeholder||''} onChange={e=>setDraft({...draft,config:{...draft.config,[field.key]:e.target.value}})}/>}
  </React.Fragment>;
- return <>{fields.filter(field=>!advanced(field)).map(renderField)}{fields.some(advanced)&&<details className="telegram-advanced"><summary>Application credentials (optional override)</summary><p className="helptext">Leave empty to use the server's Telegram application credentials. These belong to the sending application, not your proxy provider.</p>{fields.filter(advanced).map(renderField)}</details>}{integrations[draft.kind]?.help&&<p className="helptext integration-help">{integrations[draft.kind].help}</p>}{draft.config.proxy_type==='http'&&<p className="helptext">This channel uses the HTTP proxy for every request. HTTPS and SMTP use CONNECT. Authentication is optional; provide both login and password when required. Proxy failure never falls back to a direct connection.</p>}{['mtproto','webproxy'].includes(draft.config.proxy_type)&&<p className="helptext">Enter the address, port and secret supplied by your proxy provider. The server administrator configures Telegram application credentials once for MTProto/WEB delivery. Use a numeric Chat ID or @username; no chat access hash is needed for bots. MTProxy supports plain, dd and ee secrets, including telemt. WEB-proxy supports plain/dd and a root HTTPS hostname on port 443.</p>}</>;
+ return <>{['telegram','discord'].includes(draft.kind)&&<p className="helptext">Messages exceeding the provider limit are truncated with a visible marker. Full incoming content remains in history; Telegram formatting is rendered safely after truncation.</p>}{fields.filter(field=>!advanced(field)).map(renderField)}{draft.kind==='webhook'&&<WebhookBodyField draft={draft} setDraft={setDraft}/>}{fields.some(advanced)&&<details className="telegram-advanced"><summary>Application credentials (optional override)</summary><p className="helptext">Leave empty to use the server's Telegram application credentials. These belong to the sending application, not your proxy provider.</p>{fields.filter(advanced).map(renderField)}</details>}{integrations[draft.kind]?.help&&<p className="helptext integration-help">{integrations[draft.kind].help}</p>}{draft.config.proxy_type==='http'&&<p className="helptext">This channel uses the HTTP proxy for every request. HTTPS and SMTP use CONNECT. Authentication is optional; provide both login and password when required. Proxy failure never falls back to a direct connection.</p>}{['mtproto','webproxy'].includes(draft.config.proxy_type)&&<p className="helptext">Enter the address, port and secret supplied by your proxy provider. The server administrator configures Telegram application credentials once for MTProto/WEB delivery. Use a numeric Chat ID or @username; no chat access hash is needed for bots. MTProxy supports plain, dd and ee secrets, including telemt. WEB-proxy supports plain/dd and a root HTTPS hostname on port 443.</p>}</>;
 }

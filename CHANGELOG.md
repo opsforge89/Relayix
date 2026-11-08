@@ -2,8 +2,13 @@
 
 ## 0.8.7 Beta — 2026-11-08
 
+- Add a shared Telegram-proxy worker budget across channels/queues/replicas (default 2) and 20 ms retries for claim-lock contention while preserving idle backoff.
+- Add Rust/frontend unit tests to Docker-free PR checks and keep unverified OCI candidates off GHCR.
+- Truncate oversized Telegram/Discord deliveries with a visible marker and Unicode/markup-safe bounds while preserving full history.
+- Add JSON webhook body templates, PostgreSQL-coordinated per-route quotas, and administrator-only JSON configuration export/import as disabled credential-free drafts, with corresponding UI controls.
+
 - Add Docker-free PR checks for Rust formatting, Clippy and ESLint; skip documentation-only PR and main changes using `docs/**` and root `*.md` filters.
-- Build production/verification targets together once, stage the production candidate under `sha-<commit>`, and run runtime tests against its pinned digest. Promote that digest to the version and beta tags without rebuilding, preserving SBOM/provenance.
+- Build production/verification targets together once, test the local OCI archive runtime, and upload the passed artifact only after success. Promote its preserved digest to version/beta without rebuilding; failed candidates never reach GHCR.
 - Warn when an untrusted peer supplies X-Forwarded-For, including stale gateway configurations. Bound warnings to one per minute per process without logging header contents.
 - Add `DELIVERY_CHANNEL_CONCURRENCY` (default 2) across notification/alert queues and app replicas. Serialize channel claims in PostgreSQL, recount capacity after acquiring the channel lock, and index active/queued work so one slow channel cannot occupy every default worker.
 - Clarify the distributed-login throttle's limits and the independent ADMIN_TOKEN recovery API; add regression coverage for healthy-channel progress under a held Telegram backlog.

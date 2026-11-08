@@ -167,6 +167,7 @@ The database helper runs an ephemeral PostgreSQL client only when you explicitly
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Bootstrap administrator; used when creating the account |
 | `ADMIN_TOKEN` | Optional administrator API token; generated automatically |
 | `RELAYIX_NETWORK_SUBNET` / `RELAYIX_NETWORK_GATEWAY` | Stable Compose bridge, defaults `172.30.84.0/24` / `172.30.84.1`; choose a separate non-overlapping pair per installation |
+| `DELIVERY_PROXY_CONCURRENCY` | Shared MTProto/WEB attempt budget across channels/queues/replicas, default 2, range 1–32; keep below normal worker count to reserve capacity |
 | `DELIVERY_CHANNEL_CONCURRENCY` | Active attempts per channel across both queues/replicas, default 2, range 1–32; set consistently on all replicas |
 | `WEBHOOK_RATE_LIMIT_PER_MINUTE` | Webhook quota per client per minute across routes, default 600, range 1–1,000,000 |
 | `TRUSTED_PROXIES` | IPs/CIDRs allowed to supply X-Forwarded-For; Compose defaults to its fixed bridge gateway, direct launches default to empty; /0 rejected ([details](DEPLOYMENT.md#trusted-reverse-proxies-084)) |

@@ -38,6 +38,8 @@ docker build -f tests/browser.Dockerfile -t "$RELAYIX_TEST_BROWSER_IMAGE" tests
 "${compose[@]}" run --rm browser
 
 "${compose[@]}" run --rm browser python /tests/release_082_browser.py
+"${compose[@]}" run --rm browser python /tests/features_087_browser.py
+"${compose[@]}" run --rm checks python /tests/features_087.py
 "${compose[@]}" run --rm checks python /tests/release_083.py
 python3 tests/runtime_083.py
 

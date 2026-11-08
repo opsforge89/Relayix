@@ -55,6 +55,8 @@ class HTTP(BaseHTTPRequestHandler):
         with lock:
             received.append({'path': self.path, 'method': self.command, 'body': body,
                              'authorization': self.headers.get('Authorization'), 'test_proxy': self.headers.get('X-Relayix-Test-Proxy')})
+        if self.path.startswith('/limit-discord087-') and len(json.loads(body).get('content','').encode('utf-16-le'))//2>2000:
+            return self.reply(400, {'error':'content exceeds provider limit'})
         if self.path.startswith('/api/v4/'):
             if self.headers.get('Authorization') != 'Bearer ' + credentials['mattermost_token']:
                 return self.reply(401, {'message': 'Invalid token'})

@@ -8,6 +8,7 @@ pub(crate) struct Route {
     pub(crate) slug: String,
     pub(crate) enabled: bool,
     pub(crate) min_priority: i32,
+    pub(crate) rate_limit_per_minute: i32,
     pub(crate) required_tag: Option<String>,
     pub(crate) icon: String,
     pub(crate) template_id: Option<Uuid>,
@@ -29,6 +30,8 @@ pub(crate) struct RouteInput {
     pub(crate) icon: Option<String>,
     #[serde(default)]
     pub(crate) template_id: Option<Uuid>,
+    #[serde(default)]
+    pub(crate) rate_limit_per_minute: Option<i32>,
     pub(crate) name: String,
     pub(crate) slug: Option<String>,
     pub(crate) enabled: Option<bool>,
@@ -65,6 +68,9 @@ pub(crate) fn generated_slug(name: &str, id: Uuid) -> String {
 }
 pub(crate) fn valid_route(input: &RouteInput) -> Result<()> {
     payload_rules::validate_rules(&input.payload_rules)?;
+    if input.rate_limit_per_minute.is_some_and(|n| !(0..=1_000_000).contains(&n)) {
+        return Err(anyhow!("Route rate limit must be between 0 and 1000000"));
+    }
     if input
         .icon
         .as_deref()
@@ -117,7 +123,7 @@ pub(crate) async fn routes(
     h: HeaderMap,
 ) -> ApiResult<Vec<RouteResponse>> {
     auth::authenticated(&h, &s).await?;
-    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,created_at FROM routes ORDER BY created_at DESC").fetch_all(&s.db).await.map_err(db_error)?;
+    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,created_at FROM routes ORDER BY created_at DESC").fetch_all(&s.db).await.map_err(db_error)?;
     let mut out = Vec::new();
     for route in rows {
         let ids: Vec<(Uuid,)> =
@@ -160,8 +166,8 @@ pub(crate) async fn create_route(
     }
     let token = key();
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let inserted=sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,message_template_id,payload_rules) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
- .bind(id).bind(input.name.trim()).bind(&slug).bind(hash(&token)).bind(input.enabled.unwrap_or(true)).bind(input.min_priority.unwrap_or(1).clamp(1,5)).bind(input.required_tag.map(|t|t.trim().to_owned()).filter(|t|!t.is_empty())).bind(input.icon.as_deref().unwrap_or("git-branch")).bind(input.template_id).bind(json!(input.payload_rules)).execute(&mut *tx).await;
+    let inserted=sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,message_template_id,payload_rules,rate_limit_per_minute) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
+ .bind(id).bind(input.name.trim()).bind(&slug).bind(hash(&token)).bind(input.enabled.unwrap_or(true)).bind(input.min_priority.unwrap_or(1).clamp(1,5)).bind(input.required_tag.map(|t|t.trim().to_owned()).filter(|t|!t.is_empty())).bind(input.icon.as_deref().unwrap_or("git-branch")).bind(input.template_id).bind(json!(input.payload_rules)).bind(input.rate_limit_per_minute.unwrap_or(0)).execute(&mut *tx).await;
     if inserted.is_err() {
         return Err(err(
             StatusCode::CONFLICT,
@@ -217,8 +223,8 @@ pub(crate) async fn update_route(
         ));
     }
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    sqlx::query("UPDATE routes SET name=$2,enabled=$3,min_priority=$4,required_tag=$5,icon=COALESCE($6,icon),message_template_id=$7,payload_rules=$8 WHERE id=$1")
- .bind(id).bind(input.name.trim()).bind(input.enabled.unwrap_or(true)).bind(input.min_priority.unwrap_or(1).clamp(1,5)).bind(input.required_tag.map(|t|t.trim().to_owned()).filter(|t|!t.is_empty())).bind(input.icon.as_deref()).bind(input.template_id).bind(json!(input.payload_rules)).execute(&mut *tx).await.map_err(db_error)?;
+    sqlx::query("UPDATE routes SET name=$2,enabled=$3,min_priority=$4,required_tag=$5,icon=COALESCE($6,icon),message_template_id=$7,payload_rules=$8,rate_limit_per_minute=COALESCE($9,rate_limit_per_minute) WHERE id=$1")
+ .bind(id).bind(input.name.trim()).bind(input.enabled.unwrap_or(true)).bind(input.min_priority.unwrap_or(1).clamp(1,5)).bind(input.required_tag.map(|t|t.trim().to_owned()).filter(|t|!t.is_empty())).bind(input.icon.as_deref()).bind(input.template_id).bind(json!(input.payload_rules)).bind(input.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
     sqlx::query("DELETE FROM route_channels WHERE route_id=$1")
         .bind(id)
         .execute(&mut *tx)

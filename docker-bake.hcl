@@ -18,14 +18,14 @@ target "common" {
     "org.opencontainers.image.revision" = REVISION
     "org.opencontainers.image.version" = VERSION
   }
-  cache-from = ["type=registry,ref=${IMAGE}:buildcache"]
+  cache-from = ["type=gha,scope=relayix-build"]
 }
 
 target "production" {
   inherits = ["common"]
   target = "production"
-  tags = ["${IMAGE}:sha-${REVISION}"]
-  output = ["type=registry"]
+  tags = ["relayix:candidate"]
+  output = ["type=oci,dest=/tmp/relayix-candidate.tar"]
   attest = ["type=provenance,mode=max", "type=sbom"]
 }
 
@@ -34,5 +34,5 @@ target "verified" {
   target = "verified"
   tags = ["relayix:verified"]
   output = ["type=docker"]
-  cache-to = ["type=registry,ref=${IMAGE}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true"]
+  cache-to = ["type=gha,scope=relayix-build,mode=max"]
 }

@@ -37,6 +37,11 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
     if kind == "mattermost" {
         mattermost::validate(cfg)?;
     }
+    if kind == "webhook" {
+        if let Some(template) = cfg.get("body_template").filter(|v| !v.is_null()) {
+            webhook_body::validate(template)?;
+        }
+    }
     if kind == "telegram" {
         telegram_thread(cfg)?;
     }
@@ -298,9 +303,7 @@ async fn send_inner(
                 ("message", message),
             ]),
         Config::Discord { url } => client.post(url).json(&json!({"content":text})),
-        Config::Webhook { url } => client
-            .post(url)
-            .json(&json!({"title":title,"message":message,"priority":priority,"source":"relayix"})),
+        Config::Webhook { url } => client.post(url).json(&webhook_body::render(cfg.get("body_template"), title, message, priority)?),
         Config::Mattermost { url }
         | Config::Slack { url }
         | Config::Teams { url }

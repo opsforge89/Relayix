@@ -15,7 +15,6 @@ on:
         value: ${{ jobs.verify.outputs.version }}
 permissions:
   contents: read
-  packages: write
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -48,11 +47,8 @@ jobs:
       - name: Deployment backup and rollback tests (fake Docker)
         run: python3 tests/deploy.py
       - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install OCI archive transport
+        run: sudo apt-get update && sudo apt-get install -y skopeo
       - name: Prepare candidate metadata
         env:
           REPOSITORY: ${{ github.repository }}
@@ -68,14 +64,21 @@ jobs:
               output.write('REPOSITORY=' + os.environ['REPOSITORY'] + '\n')
           PYTHON
       - name: Build the candidate and verification targets together
-        run: docker buildx bake --file docker-bake.hcl --metadata-file /tmp/relayix-build.json
+        id: bake
+        uses: docker/bake-action@v7
+        with:
+          source: .
+          files: docker-bake.hcl
+      - name: Save the build metadata
+        env:
+          BUILD_METADATA: ${{ steps.bake.outputs.metadata }}
+        run: python3 -c "import os,pathlib; pathlib.Path('/tmp/relayix-build.json').write_text(os.environ['BUILD_METADATA'])"
       - name: Pin the production candidate for all runtime tests
         id: candidate
         run: |
           python3 scripts/pin_candidate.py /tmp/relayix-build.json
-          image_ref=$(cat /tmp/relayix-candidate-ref)
-          docker pull "$image_ref"
-          docker tag "$image_ref" relayix:ci
+          skopeo copy --override-os linux --override-arch amd64 \
+            oci-archive:/tmp/relayix-candidate.tar docker-daemon:relayix:ci
           python3 tests/candidate_image.py
       - name: Audit Rust dependencies
         run: |
@@ -84,6 +87,14 @@ jobs:
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.70.0 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed relayix:ci
       - name: API, SMTP and Chromium integration tests
         run: scripts/check.sh --skip-app-build
+      - name: Retain the verified OCI archive for promotion
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-candidate-${{ github.sha }}
+          path: /tmp/relayix-candidate.tar
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
       - name: Browser screenshots and failure logs
         if: always()
         uses: actions/upload-artifact@v7

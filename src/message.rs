@@ -215,7 +215,7 @@ fn formatted(kind: &str, text: &str, bold_title: bool) -> String {
     }
     out
 }
-pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
+fn render_unbounded(kind: &str, title: &str, body: &str) -> Rendered {
     let supported = matches!(kind, "telegram" | "mattermost");
     let title = if title.trim().is_empty() { "" } else { title };
     let rich = supported;
@@ -242,9 +242,69 @@ pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
     }
 }
 
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+fn prefix(text: &str, units: usize) -> String {
+    let mut used = 0;
+    text.chars().take_while(|ch| {
+        used += ch.len_utf16();
+        used <= units
+    }).collect()
+}
+
+/// Truncate source text, then render again: never cut HTML tags or entities.
+pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
+    let limit = match kind {
+        "telegram" => 4096,
+        "discord" => 2000,
+        _ => return render_unbounded(kind, title, body),
+    };
+    let full = render_unbounded(kind, title, body);
+    if utf16_len(&full.text) <= limit {
+        return full;
+    }
+    let mut title = title.to_owned();
+    let mut body = body.to_owned();
+    loop {
+        let marked = if body.is_empty() {
+            "[Message truncated]".to_owned()
+        } else {
+            format!("{body}\n\n[Message truncated]")
+        };
+        let rendered = render_unbounded(kind, &title, &marked);
+        let length = utf16_len(&rendered.text);
+        if length <= limit {
+            return rendered;
+        }
+        let remove = (length - limit).max(1);
+        if !body.is_empty() {
+            body = prefix(&body, utf16_len(&body).saturating_sub(remove));
+        } else {
+            title = prefix(&title, utf16_len(&title).saturating_sub(remove));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_limits_preserve_unicode_and_valid_markup() {
+        for kind in ["telegram", "discord"] {
+            let raw = format!("**{}** [link](https://example.org/path)", "<&😀".repeat(3000));
+            let rendered = render(kind, &json!({}), "Long title", &raw);
+            assert!(utf16_len(&rendered.text) <= if kind == "telegram" {4096} else {2000});
+            assert!(rendered.text.ends_with("[Message truncated]"));
+            assert_eq!(rendered.text.matches("<b>").count(), rendered.text.matches("</b>").count());
+            assert_eq!(rendered.text.matches("<a ").count(), rendered.text.matches("</a>").count());
+            assert!(raw.len() > 10000);
+        }
+        let exact = "a".repeat(2000);
+        assert_eq!(render("discord", &json!({}), "", &exact).text, exact);
+        assert!(!render("smtp", &json!({}), "", &"x".repeat(10000)).text.contains("[Message truncated]"));
+        assert!(render("telegram", &json!({}), &"&".repeat(6000), "").text.len() <= 4096);
+    }
     #[test]
     fn absent_titles_and_legacy_modes() {
         for payload in [

@@ -21,6 +21,7 @@ struct Endpoint {
     token_hash: String,
     template_id: Option<Uuid>,
     payload_rules: Value,
+    rate_limit_per_minute: i32,
 }
 
 struct Event {
@@ -294,6 +295,13 @@ async fn enqueue(
             Json(json!({"error":"Route disabled","queued":0,"routing":routing})),
         ));
     }
+    if endpoint.rate_limit_per_minute > 0 {
+        let admitted: Option<Uuid> = sqlx::query_scalar("INSERT INTO route_rate_windows(route_id) VALUES($1) ON CONFLICT(route_id) DO UPDATE SET window_started_at=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN NOW() ELSE route_rate_windows.window_started_at END,requests=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN 1 ELSE route_rate_windows.requests+1 END WHERE route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' OR route_rate_windows.requests<$2 RETURNING route_id")
+            .bind(endpoint.id).bind(endpoint.rate_limit_per_minute).fetch_optional(&mut *tx).await.map_err(db_error)?;
+        if admitted.is_none() {
+            return Err(err(StatusCode::TOO_MANY_REQUESTS, "Route rate exceeded; retry in 60 seconds"));
+        }
+    }
     let event_id = Uuid::new_v4();
     sqlx::query("INSERT INTO events(id,route_id,title,message,priority,tags,payload,routing,idempotency_hash,payload_hash,rendered_payload,template_snapshot,template_result) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
         .bind(event_id).bind(endpoint.id).bind(&event.title).bind(&event.message).bind(event.priority)
@@ -346,9 +354,23 @@ pub async fn ingest(
     Path(slug): Path<String>,
     headers: HeaderMap,
     Json(payload): Json<Value>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut response = ingest_inner(State(s), Path(slug), headers, Json(payload)).await.into_response();
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        response.headers_mut().insert("retry-after", axum::http::HeaderValue::from_static("60"));
+    }
+    response
+}
+
+async fn ingest_inner(
+    State(s): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
     let endpoint = sqlx::query_as::<_, Endpoint>(
-        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules FROM routes WHERE slug=$1")
+        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute FROM routes WHERE slug=$1")
         .bind(slug).fetch_optional(&s.db).await.map_err(db_error)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Unknown route"))?;
     let supplied = headers
@@ -390,7 +412,7 @@ pub async fn test_route(
 ) -> ApiResult<Value> {
     auth::authenticated(&headers, &s).await?;
     let endpoint = sqlx::query_as::<_, Endpoint>(
-        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules FROM routes WHERE id=$1")
+        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Route not found"))?;
     enqueue(&s, endpoint, payload, true, false, None).await
@@ -403,7 +425,7 @@ pub async fn preview_route(
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
     auth::authenticated(&headers, &s).await?;
-    let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules FROM routes WHERE id=$1")
+    let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(||err(StatusCode::NOT_FOUND,"Route not found"))?;
     enqueue(&s, endpoint, payload, true, true, None).await
 }
@@ -421,6 +443,7 @@ mod tests {
             token_hash: String::new(),
             template_id: None,
             payload_rules: json!([]),
+            rate_limit_per_minute: 0,
         }
     }
     #[test]
