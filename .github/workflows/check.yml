@@ -1,14 +1,10 @@
 name: Verify
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
   workflow_call:
     inputs:
       source_ref:
-        description: Git ref to verify
-        required: false
+        description: Release ref to verify before the production image build
+        required: true
         type: string
 permissions:
   contents: read
@@ -28,32 +24,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ inputs.source_ref || github.ref }}
-      - name: Classify documentation-only changes
-        id: changes
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          SOURCE_REF: ${{ inputs.source_ref }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          python3 - <<'PYTHON'
-          import os, subprocess
-          base = os.environ.get('BASE_SHA', '')
-          docs_only = False
-          if (os.environ['EVENT_NAME'] in ('push', 'pull_request')
-              and not os.environ.get('SOURCE_REF') and base and set(base) != {'0'}):
-              paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', base, 'HEAD']).decode().split('\0')
-              paths = [path for path in paths if path]
-              docs_only = bool(paths) and all(
-                  path == 'README.md' or path.startswith('docs/')
-                  for path in paths)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('docs_only=' + str(docs_only).lower() + '\n')
-          print('Documentation-only update: no image build or tests.' if docs_only else 'Application verification required.')
-          PYTHON
       - name: Check private paths and credential patterns
         run: python3 scripts/check_secrets.py
       - name: Scan application source and history
-        if: steps.changes.outputs.docs_only != 'true'
         run: |
           git ls-files -z | tar --null -T - -cf /tmp/relayix-source.tar
           mkdir -p /tmp/relayix-secret-scan
@@ -61,32 +34,27 @@ jobs:
           docker run --rm -v /tmp/relayix-secret-scan:/scan:ro ghcr.io/gitleaks/gitleaks:v8.30.1 dir /scan --config=/scan/.gitleaks.toml --redact=100 --no-banner
           docker run --rm -v "$PWD:/repo:ro" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --config=/repo/.gitleaks.toml --redact=100 --no-banner
       - name: Deployment backup and rollback tests (fake Docker)
-        if: steps.changes.outputs.docs_only != 'true'
         run: python3 tests/deploy.py
       - uses: docker/setup-buildx-action@v4
-        if: steps.changes.outputs.docs_only != 'true'
-      - name: Build application and run Rust tests
-        if: steps.changes.outputs.docs_only != 'true'
+      - name: Build verification runtime and run Rust/frontend checks
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: verified
           pull: true
           load: true
           tags: relayix:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Audit Rust dependencies
-        if: steps.changes.outputs.docs_only != 'true'
         run: |
           docker run --rm -v "$PWD:/src:ro" -w /src rust:1.99.1-trixie sh -c 'cargo install cargo-audit --version 0.22.2 --locked && cargo audit'
       - name: Scan runtime image
-        if: steps.changes.outputs.docs_only != 'true'
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.70.0 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed relayix:ci
       - name: API, SMTP and Chromium integration tests
-        if: steps.changes.outputs.docs_only != 'true'
         run: scripts/check.sh --skip-app-build
       - name: Browser screenshots and failure logs
-        if: always() && steps.changes.outputs.docs_only != 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: verification-artifacts
