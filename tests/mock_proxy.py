@@ -16,7 +16,7 @@ class Proxy(BaseHTTPRequestHandler):
         self.send_response(407);self.send_header('Content-Length','0');self.end_headers();return False
     def do_CONNECT(self):
         if not self.allowed():return
-        if self.path!='mock:1025':
+        if self.path not in ('mock:1025',socket.gethostbyname('mock')+':1025'):
             self.send_error(403);return
         with socket.create_connection(('mock',1025),timeout=5) as remote:
             self.send_response(200);self.end_headers()

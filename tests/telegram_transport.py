@@ -92,3 +92,15 @@ asyncio.run(module.deliver({**data,'text':'Tasks:\n<a href="https://tickets.exam
 assert seen[-2].message=='Tasks:\nTASK-123'
 assert len(seen[-2].entities)==1 and isinstance(seen[-2].entities[0],types.MessageEntityTextUrl)
 assert seen[-2].entities[0].url=='https://tickets.example.org/project/Task/TASK-123'
+
+# WEB keeps its TLS hostname but never re-resolves a checked address.
+if hasattr(module,'pin_proxy_dns'):
+    import socket
+    original=socket.getaddrinfo
+    try:
+        module.pin_proxy_dns({'proxy_type':'webproxy','outbound_proxy_host':'proxy.example.org','outbound_proxy_ip':'203.0.113.7'})
+        assert socket.getaddrinfo('proxy.example.org',443)[0][4][0]=='203.0.113.7'
+        try:socket.getaddrinfo('localhost',443);raise AssertionError('Unapproved hostname was resolved')
+        except OSError:pass
+    finally:socket.getaddrinfo=original
+    print('PASS: WEB proxy DNS pinning preserves hostname and blocks alternate resolutions')

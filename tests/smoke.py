@@ -1,7 +1,7 @@
 """Isolated contract tests: never sends to Telegram/Pushover or other real services."""
 import json
 import os
-from runtime import credentials
+from runtime import credentials,version as EXPECTED_VERSION
 import time
 import subprocess
 from email import policy
@@ -60,7 +60,7 @@ def main():
     api = Client(TOKEN)
     for _ in range(90):
         try:
-            if api.ok('/healthz')['version'] == '0.8.1':
+            if api.ok('/healthz')['version'] == EXPECTED_VERSION:
                 break
         except (URLError, AssertionError):
             time.sleep(1)
@@ -331,6 +331,11 @@ def main():
     verify_groups(api, Client())
     from templates_contract import verify as verify_templates
     verify_templates(api, Client())
+    from release_082 import verify as verify_release_082
+    verify_release_082(api, Client())
+    if api.ok('/healthz')['version']!='0.8.2':
+        from release_083 import verify as verify_release_083
+        verify_release_083(api)
     print('All smoke tests passed.', flush=True)
 
 

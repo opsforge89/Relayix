@@ -1,4 +1,0 @@
-Upstream: https://github.com/nsdkinx/tgnet
-Commit: 4f3ebe77c65fcb77afa5404926b13e38f5c4f43e
-License: MIT; Copyright 2026 Dmitry Nasedkin
-Selected FakeTLS protocol helpers; imports adapted for Relayix. Connection integration and tests are original Relayix code.

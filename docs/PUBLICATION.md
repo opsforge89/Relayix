@@ -20,6 +20,6 @@ Use a fresh empty temporary export directory each time. The scanner checks index
 
 A clean scan reduces publication risk; it does not prove that no unknown secret exists. Check GitHub's secret scanning after publication as another independent signal. Do not commit live credentials to tests, screenshots, issue reports, Docker build arguments or workflows. Database credentials and channel secrets are intentionally stored in the private database and may exist in private backups; they are not publication inputs.
 
-Relayix source uses Apache-2.0. Keep LICENSE, NOTICE, THIRD_PARTY_NOTICES.md and LICENSES/ with distributions. Third-party software retains its own license; service trademarks are not granted by Apache-2.0. See the inventories for dependencies and retained upstream license texts.
+Relayix source uses Apache-2.0. Keep LICENSE, NOTICE and THIRD_PARTY_NOTICES.md with distributions, together with the dependency license bundle generated into `/usr/share/doc/relayix/licenses` during the image build. Third-party software retains its own license; service trademarks are not granted by Apache-2.0. See the inventories for dependencies and retained upstream license texts.
 
 Test credentials are generated per run in a private temporary directory, shared with the mock/check containers, masked in GitHub Actions logs and removed after the stack shuts down. CI needs no stored admin/database/provider passwords. `tests/smoke.py` and `tests/browser.py` read their base URL from the test environment.

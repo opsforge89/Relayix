@@ -34,3 +34,6 @@ secrets/
 config/deployment.json
 **/credentials.json
 **/compose.env
+
+# Dependency license texts and inventories are generated during image builds.
+LICENSES/

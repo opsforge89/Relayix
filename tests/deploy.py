@@ -52,14 +52,14 @@ os.execv({sys.executable!r}, [{sys.executable!r}] + sys.argv[1:])
     python.chmod(0o755)
     env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
            'RELAYIX_IMAGE_OVERRIDE':'ghcr.io/example/relayix:0.6.0',
-           'RELAYIX_DEPLOY_IMAGE': 'ghcr.io/example/relayix:0.8.1', 'RELAYIX_EXPECTED_VERSION': '0.8.1', 'RELAYIX_BACKUP_DIR': str(root / 'private-backups'), 'RELAYIX_CONFIG_FILE':str(config)}
+           'RELAYIX_DEPLOY_IMAGE': 'ghcr.io/example/relayix:0.8.2', 'RELAYIX_EXPECTED_VERSION': '0.8.2', 'RELAYIX_BACKUP_DIR': str(root / 'private-backups'), 'RELAYIX_CONFIG_FILE':str(config)}
     def run(extra=None):
         return subprocess.run(['bash', str(root / 'scripts' / 'deploy.sh')], cwd=root,
                               env={**env, **(extra or {})}, capture_output=True, text=True)
     (config).write_text(OLD)
     result = run()
     assert result.returncode == 0, result.stderr
-    assert 'image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/example/relayix:0.8.1}' in compose_file.read_text()
+    assert 'image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/example/relayix:0.8.2}' in compose_file.read_text()
     assert 'RELAYIX_IMAGE' not in json.loads(config.read_text())
     assert json.loads(config.read_text())['POSTGRES_PASSWORD']==PASSWORD
     assert (root/'docker.log').read_text().count('explicit-image-override')==1
@@ -73,7 +73,7 @@ os.execv({sys.executable!r}, [{sys.executable!r}] + sys.argv[1:])
     (root / 'docker.log').write_text('')
     compose_file.write_text(OLD_COMPOSE)
     # A source checkout may already select the new release while the old image is running.
-    compose_file.write_text(OLD_COMPOSE.replace('0.6.1', '0.8.1'))
+    compose_file.write_text(OLD_COMPOSE.replace('0.6.1', '0.8.2'))
     result = run({'FAIL_HEALTH': '1'})
     assert compose_file.read_text()==OLD_COMPOSE
     assert result.returncode != 0 and (config).read_text() == OLD

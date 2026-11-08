@@ -45,7 +45,7 @@ jobs:
               paths = [path for path in paths if path]
               docs_only = bool(paths) and all(
                   path == 'README.md' or path.startswith('docs/')
-                  or path == '.github/workflows/check.yml' for path in paths)
+                  for path in paths)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('docs_only=' + str(docs_only).lower() + '\n')
           print('Documentation-only update: no image build or tests.' if docs_only else 'Application verification required.')
@@ -75,6 +75,13 @@ jobs:
           tags: relayix:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Audit Rust dependencies
+        if: steps.changes.outputs.docs_only != 'true'
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src rust:1.99.1-trixie sh -c 'cargo install cargo-audit --version 0.22.2 --locked && cargo audit'
+      - name: Scan runtime image
+        if: steps.changes.outputs.docs_only != 'true'
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.70.0 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed relayix:ci
       - name: API, SMTP and Chromium integration tests
         if: steps.changes.outputs.docs_only != 'true'
         run: scripts/check.sh --skip-app-build

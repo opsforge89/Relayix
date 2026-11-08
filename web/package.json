@@ -1,18 +1,23 @@
 {
   "name": "relayix-web",
-  "version": "0.8.1",
+  "version": "0.8.3",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build"
+    "build": "vite build",
+    "lint": "eslint . --max-warnings=0",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "lucide-react": "^1.69.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "lucide-react": "^1.69.0"
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
     "vite": "^8.3.6"
   },
   "license": "Apache-2.0",

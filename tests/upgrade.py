@@ -1,4 +1,4 @@
-"""Upgrade a real 0.6.4 database without touching installed deployment data."""
+"""Upgrade real 0.6.4 and 0.8.1 data without touching installed deployment data."""
 import json
 import os
 from pathlib import Path
@@ -12,7 +12,7 @@ project='relayix-test-upgrade-'+secrets.token_hex(5)
 network=project+'-network'
 db=project+'-db'
 app=project+'-app'
-image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.1')
+image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.3')
 
 def run(args, **kwargs):
     result=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,**kwargs)
@@ -52,24 +52,32 @@ INSERT INTO events(id,route_id,title,message,priority,payload) VALUES('{eid}','{
 INSERT INTO deliveries(id,event_id,channel_id,status,attempts,error) VALUES('{did}','{eid}','{cid}','failed',5,'Previous failure');"""
         run(['docker','exec','-i',db,'psql','-U','relayix','-d','relayix','-v','ON_ERROR_STOP=1'],input=sql)
         run(['docker','rm','-f',app])
+        start('ghcr.io/opsforge89/relayix:0.8.1',appenv)
+        tid=str(uuid.uuid4())
+        run(['docker','exec','-i',db,'psql','-U','relayix','-d','relayix','-v','ON_ERROR_STOP=1'],input="INSERT INTO message_templates(id,name,body,version) VALUES('"+tid+"','Existing template','Legacy {{message}}',3); UPDATE routes SET message_template_id='"+tid+"' WHERE id='"+rid+"';")
+        run(['docker','rm','-f',app])
         start(image,appenv)
         probe="""import json,urllib.request
 from pathlib import Path
 token=next(line.split('=',1)[1] for line in Path('/proc/self/environ').read_bytes().decode().split(chr(0)) if line.startswith('ADMIN_TOKEN='))
 def api(path):
  return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080'+path,headers={'Authorization':'Bearer '+token})))
-assert api('/healthz')['version']=='0.8.1'
+assert api('/healthz')['version']=='0.8.3'
 event=api('/api/events?route_id=RID')['items'][0]
 assert event['id']=='EID' and event['title']=='Preserved legacy event' and event['routing'] is None
 attempts=api('/api/deliveries/DID/attempts')
 assert attempts['attempts']==5 and attempts['items']==[] and attempts['can_retry']
 route=next(r for r in api('/api/routes') if r['id']=='RID')
 assert route['required_tag']=='Deploy' and route['fallback_channel_ids']==[]
-""".replace('RID',rid).replace('EID',eid).replace('DID',did)
+assert route['payload_rules']==[] and route['template_id']=='TID'
+versions=api('/api/templates/TID/versions')['items']
+assert len(versions)==1 and versions[0]['version']==3
+assert versions[0]['snapshot']['body']=='Legacy {{message}}' and not versions[0]['snapshot']['computed_status']
+""".replace('RID',rid).replace('EID',eid).replace('DID',did).replace('TID',tid)
         run(['docker','exec',app,'python3','-c',probe])
         cycle=run(['docker','exec',db,'psql','-U','relayix','-d','relayix','-Atc',"SELECT cycle_attempts FROM deliveries WHERE id='"+did+"'"])
         assert cycle.strip()=='5'
-        print('PASS: real 0.6.4 → 0.8.1 upgrade preserves users, routes, events, failed attempts and UI labels',flush=True)
+        print('PASS: real 0.6.4 → 0.8.1 → current upgrade preserves users/routes/events/attempts and seeds existing template version history',flush=True)
     finally:
         subprocess.run(['docker','rm','-f','-v',app,db],capture_output=True)
         subprocess.run(['docker','network','rm',network],capture_output=True)

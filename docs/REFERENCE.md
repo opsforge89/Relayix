@@ -283,3 +283,53 @@ Relayix original source is licensed under [Apache-2.0](../LICENSE). Preserve [NO
 Schema migrations belong in source control. Private deployment configuration, database dumps, Telegram sessions and backups do not. Local backups have been moved outside the checkout. See [publication checks](PUBLICATION.md) and [GitHub setup](GITHUB.md). Nothing is automatically pushed by those local checks.
 
 Incoming history query fields: `route_id`, `reason`, `search`, `page`, `page_size` (1–100). Route create/update accepts `fallback_channel_ids` separately from primary `channel_ids`.
+
+## Bulk retry of final failures
+
+On **Deliveries**, apply the desired filters, choose **Retry failed deliveries**, review the recipient list, and confirm. The preview includes up to 500 final-failure recipients, not 500 events. Sent, queued and processing deliveries are excluded. With a status filter, choose **Failed** or **All statuses** first.
+
+`POST /api/deliveries/retry-batch/preview` accepts `{"filters":{"route_id":"UUID","group_events":true}}`. The response includes `batch_id`, `items`, `count`, `total`, and `expires_at`. Confirm with `POST /api/deliveries/retry-batch/{batch_id}`. Previews are account-owned and expire after 15 minutes. Confirmation is atomic and idempotent; it skips recipients whose state has changed. Attempt records, event payloads and template snapshots are preserved. Retry starts a new attempt cycle and may produce a new personal warning if that cycle fails.
+
+## Template versions and cloning
+
+**Templates → History** compares a saved version with the current layout. Restoring creates a new version; it never rewrites previous versions or accepted event snapshots. Existing templates receive a history entry for their current version when upgrading to 0.8.2. Earlier edits made before version history was available cannot be reconstructed.
+
+`GET /api/templates/{id}/versions` returns up to 100 versions, newest first. Use `?before=VERSION` with the response's `next_before` to load older versions. `POST /api/templates/{id}/versions/{version}/restore` restores that content as a new current version.
+
+**Clone** opens an editable copy of a route or template. Nothing is created until saving. Template copies start at version 1 with their own history. Route copies preserve recipients, fallback recipients, icon, template assignment and payload rules, but receive a fresh endpoint and secret key when saved.
+
+## Incoming JSON validation
+
+**Routes → Edit → Incoming JSON validation** defines up to 40 optional rules for the original payload. Types are `string`, `integer`, `number`, `boolean`, `array`, `object`, and `url`. Numeric rules accept optional `min` and `max`. Required fields must exist and cannot be null. Optional absent or null fields are skipped. Values are never coerced: the string `"2"` is not an integer. URL fields accept HTTP/HTTPS URLs without embedded credentials. Dotted paths address nested objects, up to eight levels.
+
+The route's `payload_rules` field is an array such as:
+
+```json
+[
+  {"field":"suite","kind":"string","required":true},
+  {"field":"passed","kind":"integer","required":true,"min":0},
+  {"field":"failed","kind":"integer","required":true,"min":0}
+]
+```
+
+Validation runs before template rendering or event/queue insertion and also applies to route previews and test sends. Invalid input returns HTTP 400, for example `{"error":"Invalid payload","fields":{"suite":"Required field","failed":"Expected integer"}}`. No event is stored. An empty rule list preserves existing behavior. An accepted idempotent replay retains its original event even if validation settings later change.
+
+## Computed template status
+
+Enable **Compute status from test counts** in the template editor and use `{{status}}` in the title, message or optional URL. The template fields `computed_status`, `passed_field`, and `failed_field` configure the calculation. Counter paths default to `passed` and `failed`; nested paths such as `counts.passed` are supported.
+
+Rules run in this order:
+
+1. A valid `failed` count greater than zero produces ❌, even if `passed` is positive.
+2. A valid `failed` count of zero and a valid positive `passed` count produce ✅.
+3. Otherwise the result is ⚠️.
+
+Counters must be non-negative JSON integers. Missing, negative or incorrectly typed values produce preview warnings and cannot imply success. Enabling calculation replaces the incoming `status` in the rendered payload only. The original payload remains unchanged. Failure-only links use the computed result, including when custom counter paths are used. With calculation disabled, incoming status and previous template behavior are retained. The Test results example enables calculation, so CI only needs to supply counters.
+
+## Personal delivery alerts
+
+Sign in with a personal account, then open **My profile → Delivery alerts**. Choose one or more enabled channels, optionally restrict routes, select **Final failure**, **First error**, or **Failure threshold**, set the time window and repeat interval, and save. **Send test alert** verifies the saved recipients through the separate alert queue. **My alert delivery history** shows the latest 100 deliveries belonging to that account; failed alerts can be retried while the subscription is enabled.
+
+A final-failure trigger requires an actual `failed` state, not merely a high historical attempt count. A warning is recorded once per recipient delivery and retry cycle; cooldown limits warnings about new failures. Disabling a subscription or user prevents queued personal warnings from being sent. Deleted users' subscriptions and private warning records are removed. Shared administrator rules remain separate and do not expose personal subscriptions or personal history. Alert failures never generate additional alerts.
+
+Personal endpoints are `/api/auth/delivery-alerts` (GET/PUT), `/api/auth/delivery-alerts/test` (POST), `/api/auth/delivery-alerts/history` (GET), and `/api/auth/delivery-alerts/history/{id}/retry` (POST). They always derive ownership from the authenticated user. The administrator API token has no personal account and cannot use these endpoints. Recovery notifications are a separate future enhancement.

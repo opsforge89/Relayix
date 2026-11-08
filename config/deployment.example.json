@@ -16,5 +16,8 @@
   "TELEGRAM_API_ID": "",
   "TELEGRAM_API_HASH": "",
   "RUST_LOG": "relayix=info,tower_http=info",
-  "ALLOW_INSECURE_HTTP": "false"
+  "ALLOW_INSECURE_HTTP": "false",
+  "OUTBOUND_ALLOWLIST": "",
+  "DELIVERY_WORKERS": "4",
+  "EVENT_RETENTION_DAYS": "30"
 }
