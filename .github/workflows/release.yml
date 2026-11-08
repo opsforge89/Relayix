@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Existing numeric version tag, for example 0.8.3
+        description: Existing numeric version tag, for example 0.8.4
         required: true
         type: string
 permissions:

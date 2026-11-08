@@ -10,7 +10,7 @@ The local origin is connected to https://github.com/opsforge89/Relayix.git and b
 git remote -v  # origin: https://github.com/opsforge89/Relayix.git
 git add .
 git diff --cached --stat
-git commit -m "Prepare Relayix 0.8.3 Beta"
+git commit -m "Prepare Relayix 0.8.4 Beta"
 git push -u origin main
 ```
 
@@ -27,13 +27,13 @@ In repository settings enable Actions and Packages. Protect `main` and require t
 When a tested version is ready:
 
 ```bash
-git tag v0.8.3
-git push origin v0.8.3
+git tag v0.8.4
+git push origin v0.8.4
 ```
 
-`Release Docker image` runs the complete CI again, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.3` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
+`Release Docker image` runs the complete CI again, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.4` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
 
-`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.3`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
+`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.4`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
 
 Container package visibility is controlled in GitHub Packages. For anonymous pulls set the package public. For private pulls authenticate on the deployment host with a token allowed to read that package; do not commit the credential.
 
@@ -58,6 +58,7 @@ Use **Variables** for nonsecret configuration:
 - `RELAYIX_COMPOSE_PROJECT`: `relayix` for this existing installation.
 - `RELAYIX_HEALTH_URL`: `http://192.168.39.110:8080/healthz` for this installation.
 - `RELAYIX_ADMIN_USERNAME`, `RELAYIX_BIND_ADDRESS`, `RELAYIX_PORT`, `RELAYIX_COOKIE_SECURE`, `RELAYIX_ALLOW_INSECURE_HTTP` and `RELAYIX_RUST_LOG` configure the app.
+- `RELAYIX_TRUSTED_PROXIES`, `RELAYIX_OUTBOUND_ALLOWLIST`, `RELAYIX_DELIVERY_WORKERS` and `RELAYIX_EVENT_RETENTION_DAYS` configure forwarded client identity, outbound access, delivery concurrency and retention.
 - `RELAYIX_DATABASE_MODE`, `RELAYIX_POSTGRES_HOST`, `RELAYIX_POSTGRES_PORT`, `RELAYIX_POSTGRES_USER`, `RELAYIX_POSTGRES_DB`, `RELAYIX_POSTGRES_SSLMODE` and optional `RELAYIX_POSTGRES_SSLROOTCERT` configure database access.
 - `RELAYIX_POSTGRES_IMAGE`, `RELAYIX_POSTGRES_CLIENT_IMAGE` and `RELAYIX_DB_VOLUME` preserve database image and storage selection.
 

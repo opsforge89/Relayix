@@ -1,13 +1,13 @@
 //! Request boundaries, maintenance and process lifecycle.
 use crate::*;
 use axum::{
-    extract::{ConnectInfo, Request},
+    extract::Request,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::IpAddr,
     sync::{Mutex, OnceLock},
     time::Instant,
 };
@@ -37,6 +37,7 @@ struct Limiter {
 }
 impl Limiter {
     fn allow(&mut self, ip: IpAddr, login: bool, now: Instant) -> bool {
+        let ip = client_ip::ClientIp(ip).key();
         // Fixed windows bound both request work and limiter memory. Never evict active quotas.
         if self.entries.len() >= 10000 {
             self.entries
@@ -62,16 +63,17 @@ pub async fn rate_limit(request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if path == "/api/auth/login" || path.starts_with("/h/") {
         static LIMITS: OnceLock<Mutex<Limiter>> = OnceLock::new();
-        // Forwarded headers are untrusted. Reverse proxies share a quota unless they preserve the peer address.
-        let peer = request
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|p| p.0.ip())
-            .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+        let Some(client) = request.extensions().get::<client_ip::ClientIp>() else {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Client address unavailable",
+            )
+            .into_response();
+        };
         let allowed = LIMITS
             .get_or_init(|| Mutex::new(Limiter::default()))
             .lock()
-            .map(|mut l| l.allow(peer, path == "/api/auth/login", Instant::now()))
+            .map(|mut l| l.allow(client.key(), path == "/api/auth/login", Instant::now()))
             .unwrap_or(false);
         if !allowed {
             let mut response = err(
@@ -129,6 +131,24 @@ pub async fn maintenance(db: PgPool, days: u32, mut stop: tokio::sync::watch::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rotating_ipv6_addresses_do_not_fill_the_limiter() {
+        let mut limiter = Limiter::default();
+        let now = Instant::now();
+        for suffix in 1..=20000u128 {
+            let address = IpAddr::V6(std::net::Ipv6Addr::from(
+                (0x20010db800010002u128 << 64) | suffix,
+            ));
+            assert_eq!(limiter.allow(address, true, now), suffix <= 60);
+        }
+        assert_eq!(limiter.entries.len(), 1);
+        assert!(limiter.allow("2001:db8:1:3::1".parse().unwrap(), true, now));
+        assert!(limiter.allow("192.0.2.1".parse().unwrap(), true, now));
+        for _ in 1..60 {
+            assert!(limiter.allow("::ffff:192.0.2.1".parse().unwrap(), true, now));
+        }
+        assert!(!limiter.allow("192.0.2.1".parse().unwrap(), true, now));
+    }
     #[test]
     fn request_limits_isolate_clients_and_expire() {
         let mut limiter = Limiter::default();

@@ -155,7 +155,7 @@ With both Telegram application credentials empty, direct/HTTP Bot API delivery r
 
 The default host binding is now `127.0.0.1:8080`. For remote administration without public exposure, use `ssh -L 8080:127.0.0.1:8080 your-server` and open `http://127.0.0.1:8080` locally.
 
-For a public endpoint, point a domain at the server, install Caddy on the host, and allow inbound ports 80 and 443. Keep `BIND_ADDRESS=127.0.0.1`, set `COOKIE_SECURE=true` in `.env`, and recreate the application:
+For a public endpoint, point a domain at the server, install Caddy on the host, and allow inbound ports 80 and 443. Keep `BIND_ADDRESS=127.0.0.1`, set `COOKIE_SECURE=true` and configure `TRUSTED_PROXIES` as described below in `.env`, then recreate the application:
 
 ```bash
 docker compose up -d --no-deps app
@@ -170,10 +170,30 @@ Private, loopback, link-local, multicast and reserved destination addresses are 
 
 For an internal Gotify/ntfy or SMTP server, explicitly list its IP or subnet, for example `OUTBOUND_ALLOWLIST=192.168.10.5/32,fd12:3456::5/128`. This administrative setting trusts these destinations for all channel creators; prefer individual addresses. `ALLOW_INSECURE_HTTP=true` permits HTTP separately and does not bypass address checks. HTTP proxies resolve HTTP destinations themselves: use only trusted proxies, enforce the same destination restrictions on the proxy, and restrict its egress. Database connections use their existing separate database configuration.
 
-Login permits 60 requests per minute per peer IP, with an additional 10-failure window per IP and username for 15 minutes. Webhooks permit 600 requests per minute per peer IP across routes; rejection returns 429 with `Retry-After`. Counters are bounded in memory and reset on application restart. Forwarded headers are ignored, so a reverse proxy shares its quota across clients; apply additional client-IP limits at the proxy. Multiple application replicas have independent request quotas.
+Login permits 60 requests per minute per client identity, with an additional 10-failure window per identity and username for 15 minutes. Webhooks permit 600 requests per minute across routes; rejection returns 429 with `Retry-After`. IPv6 identities are aggregated by `/64`. Configure `TRUSTED_PROXIES` for forwarded client addresses; otherwise a proxy shares both quotas and account lockouts across its clients. See the [trusted proxy settings](#trusted-reverse-proxies-084) below. Multiple application replicas have independent request quotas.
 
 `DELIVERY_WORKERS=4` controls concurrent normal deliveries (1–32). Telegram subprocesses have a separate limit of four across diagnostics and deliveries. Shutdown stops new claims and drains active work; Compose allows 75 seconds. Expired leases recover interrupted work on startup. `/healthz` checks PostgreSQL and returns 503 when it is unavailable; the image includes a healthcheck.
 
 `EVENT_RETENTION_DAYS=30` removes completed history older than 30 days, including delivery attempts and alert history. Set `0` to keep history indefinitely. Maintenance runs once per minute in batches of up to 1,000 events and 1,000 alerts, preserving events with queued/processing deliveries. Sessions, expired retry confirmations and login windows are also cleaned. Back up history before upgrading if you need to retain more than 30 days, and set the retention value before startup.
 
 The migration installs PostgreSQL's trusted `pg_trgm` extension for substring-search indexes; the migration role needs `CREATE` on the database, or an administrator must install the extension first. Index creation on a large existing history can extend migration time. Distinct event tags are maintained transactionally so tag suggestions no longer scan all events.
+
+## Trusted reverse proxies (0.8.4)
+
+Use the updated `compose.yaml`, which forwards `TRUSTED_PROXIES` into the app container; older Compose files need this environment mapping added explicitly. Keep your existing `.env` and its credentials. Set `TRUSTED_PROXIES` to comma-separated IP addresses or CIDRs of the reverse proxies that connect to Relayix, for example `TRUSTED_PROXIES=172.18.0.1/32,2001:db8:ffff::2/128`. The default is empty. Relayix reads `X-Forwarded-For` only from these TCP peers, walks the chain right-to-left through trusted proxies, and selects the first untrusted address. Multiple header lines are treated as one chain. Invalid trusted chains return 400; untrusted peers cannot change their identity using forwarding headers. Hostnames and IP:port entries are not accepted. `Forwarded` and `X-Real-IP` do not override the selected address.
+
+For the host Caddy example above, Docker normally presents host-to-container traffic as the bridge gateway address. Find that address after starting Compose:
+
+```bash
+docker inspect "$(docker compose ps -q app)" --format '{{range .NetworkSettings.Networks}}{{println .Gateway}}{{end}}'
+```
+
+Set the returned address as an exact `/32` (IPv4) or `/128` (IPv6) entry in `.env`, then run `docker compose up -d --no-deps app`. If your network routing differs, temporarily set `RUST_LOG=relayix=debug` and inspect `peer_ip` / `client_ip` in the app logs to confirm the connecting proxy and the selected client. Trust the actual proxy addresses, rather than every Docker container or a network containing your end users. Keep the app port accessible only through your intended proxy.
+
+Caddy supplies forwarding headers and ignores client-supplied values by default. For additional proxies/CDNs in front of Caddy, configure the appropriate trusted proxy chains on Caddy as well as Relayix. See [Caddy's forwarding-header documentation](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults).
+
+Both request quotas and the 15-minute failed-login window use the same selected client identity. IPv4 addresses use individual buckets; IPv6 addresses share buckets by `/64`, and IPv4-mapped IPv6 addresses use the corresponding IPv4 bucket. Proxy trust itself is checked against the full IP address before this aggregation. Rotating IPv6 interface IDs within one `/64` therefore cannot create thousands of limiter entries or bypass a lockout.
+
+If a proxy is not trusted, or a trusted proxy omits `X-Forwarded-For`, all its clients still share the proxy's quotas **and the IP/username lockout**. Configure this setting before exposing the login through a reverse proxy. Request quotas remain per process and reset on restart; the failed-login window is stored in PostgreSQL.
+
+Delivery leases are renewed every 20 seconds for both notifications and alert deliveries, including while waiting for a Telegram subprocess slot. Renewals require the same active attempt number and an unexpired lease; a failed renewal or ownership change cancels the transport. Completion updates are fenced by attempt number. The existing 60-second send deadline and 50-second subprocess deadline remain in place. Lease recovery after a crash remains available; renewal does not make external delivery outcomes exactly-once after a network failure.

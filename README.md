@@ -60,7 +60,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Release image: `ghcr.io/opsforge89/relayix:0.8.3`.
+Release image: `ghcr.io/opsforge89/relayix:0.8.4`.
 
 Change the app image tag in `compose.yaml`, then run:
 
@@ -69,7 +69,7 @@ docker compose pull app
 docker compose up -d --no-deps app
 ```
 
-Keep your `.env` and database volume. Migrations run automatically.
+Keep your `.env` and database volume. Migrations run automatically. For reverse-proxy installations on 0.8.4, use the updated `compose.yaml` (or explicitly pass `TRUSTED_PROXIES` into the app environment) and [configure the trusted proxy addresses](docs/DEPLOYMENT.md#trusted-reverse-proxies-084).
 
 ## Preview
 

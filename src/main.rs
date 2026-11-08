@@ -1,6 +1,8 @@
 mod channel_api;
 mod channel_config;
+mod client_ip;
 mod delivery_api;
+mod lease;
 mod route_api;
 use channel_api::*;
 use delivery_api::*;
@@ -190,6 +192,9 @@ async fn main() -> Result<()> {
     } else {
         tracing::info!("Telegram MTProto/WEB unavailable until TELEGRAM_API_ID and TELEGRAM_API_HASH are configured; direct/HTTP Bot API remains available");
     }
+    let trusted_proxies = Arc::new(client_ip::TrustedProxies::parse(
+        &env::var("TRUSTED_PROXIES").unwrap_or_default(),
+    )?);
     let policy = network::policy()?;
     let worker_count = runtime::setting("DELIVERY_WORKERS", 4, 1, 32)?;
     let retention_days = runtime::setting("EVENT_RETENTION_DAYS", 30, 0, 3650)?;
@@ -307,6 +312,10 @@ async fn main() -> Result<()> {
         )
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(axum::middleware::from_fn(runtime::rate_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            trusted_proxies,
+            client_ip::resolve,
+        ))
         .layer(axum::middleware::from_fn(runtime::security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(s);

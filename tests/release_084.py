@@ -1,0 +1,109 @@
+"""Isolated trusted-proxy and Telegram-slot/lease regressions, using two app processes."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import time
+import uuid
+
+ROOT=Path(__file__).resolve().parents[1]
+project='relayix-test-084-'+uuid.uuid4().hex[:10]
+image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.4')
+
+def run(args,**kwargs):
+    result=subprocess.run(args,capture_output=True,text=True,timeout=100,**kwargs)
+    if result.returncode:raise AssertionError('Regression command failed; private output omitted: '+args[0])
+    return result.stdout.strip()
+def wait(predicate,timeout=40):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        result=predicate()
+        if result:return result
+        time.sleep(.2)
+    raise AssertionError('0.8.4 regression condition timed out')
+
+with tempfile.TemporaryDirectory(prefix=project) as folder:
+    runtime=Path(folder)
+    run(['python3',str(ROOT/'tests/generate_runtime.py'),folder])
+    state=runtime/'telegram-state';state.mkdir();state.chmod(0o777)
+    env={**os.environ,'RELAYIX_TEST_IMAGE':image,'RELAYIX_TEST_RUNTIME_DIR':folder}
+    compose=['docker','compose','--env-file',str(runtime/'compose.env'),'-p',project,'-f',str(ROOT/'tests/compose.yaml'),'-f',str(ROOT/'tests/compose_084.yaml')]
+    def dc(*args):return run([*compose,*args],env=env)
+    def sql(query):return dc('exec','-T','db','psql','-U','relayix','-d','relayix','-Atc',query)
+    def app(code,data=None):return json.loads(run([*compose,'exec','-T','app','python3','-c',code],env=env,input=json.dumps(data) if data is not None else None))
+    def started():
+        p=state/'started.jsonl'
+        return [json.loads(line) for line in p.read_text().splitlines()] if p.exists() else []
+    try:
+        dc('up','-d','--wait','--wait-timeout','60','db','mock','app')
+        # Run in the app network namespace; credentials remain in its environment.
+        proxy_test=(ROOT/'tests/proxy_084.py').read_text()
+        print(dc('exec','-T','app','python3','-c',proxy_test),flush=True)
+        # Direct callers must not get forwarded-header trust just because another peer is trusted.
+        probe="""import json,urllib.request,urllib.error
+codes=[]
+for index in range(61):
+ r=urllib.request.Request('http://app:8080/api/auth/login',data=b'{}',headers={'Content-Type':'application/json','X-Forwarded-For':'203.0.113.'+str(index)})
+ try:p=urllib.request.urlopen(r)
+ except urllib.error.HTTPError as e:p=e
+ codes.append(p.status);p.close()
+assert codes[-1]==429 and 429 in codes
+print('PASS: untrusted direct peers cannot spoof their quota identity')
+"""
+        print(dc('exec','-T','mock','python3','-c',probe),flush=True)
+        fixture=app("""import json,os,urllib.request,uuid
+def api(path,data,headers=None):
+ h={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['ADMIN_TOKEN']};h.update(headers or {})
+ return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080'+path,data=json.dumps(data).encode(),headers=h)))
+c=api('/api/channels',{'name':'Held Telegram fixture','kind':'telegram','config':{'bot_token':'123:'+uuid.uuid4().hex,'chat_id':'-100123','api_id':'12345','api_hash':uuid.uuid4().hex,'proxy_type':'mtproto','proxy_host':'mock','proxy_port':'443','proxy_secret':uuid.uuid4().hex}})['id']
+r=api('/api/routes',{'name':'Held Telegram lease fixture','channel_ids':[c]})
+events=[api(r['endpoint'],{'message':'Lease fixture'},{'X-Relay-Key':r['token']})['event_id'] for _ in range(8)]
+print(json.dumps({'channel':c,'route':r['id'],'events':events,'endpoint':r['endpoint'],'token':r['token']}))
+""")
+        route=fixture['route']
+        wait(lambda:sql(f"SELECT COUNT(*) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE e.route_id='{route}' AND d.status='processing'")=='8')
+        wait(lambda:len(started())==4)
+        claimed=set(sql(f"SELECT d.id FROM deliveries d JOIN events e ON e.id=d.event_id WHERE e.route_id='{route}'").splitlines())
+        waiting=next(iter(claimed-{row['id'] for row in started()}))
+        sql(f"UPDATE deliveries SET locked_at=NOW()-INTERVAL '90 seconds' WHERE id='{waiting}'")
+        aged=time.monotonic()
+        dc('up','-d','replica')
+        # After 30 seconds an unrenewed row would be reclaimable by this other process.
+        while time.monotonic()-aged<35:
+            assert sql(f"SELECT attempts FROM deliveries WHERE id='{waiting}'")=='1'
+            assert len(started())==4
+            time.sleep(.5)
+        assert float(sql(f"SELECT EXTRACT(EPOCH FROM NOW()-locked_at) FROM deliveries WHERE id='{waiting}'"))<25
+        (state/'release').touch()
+        wait(lambda:sql(f"SELECT COUNT(*) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE e.route_id='{route}' AND d.status='sent' AND d.attempts=1")=='8')
+        rows=started();assert len(rows)==8 and len({r['id'] for r in rows})==8
+        print('PASS: eight workers/four Telegram slots renew waiting leases and prevent a second process reclaiming them',flush=True)
+        # Simulate a new owner/attempt. The old owner must cancel its child and cannot commit a result.
+        dc('stop','replica')
+        (state/'release').unlink()
+        event=app("""import json,sys,urllib.request
+fixture=json.load(sys.stdin)
+r=urllib.request.Request('http://127.0.0.1:8080'+fixture['endpoint'],data=b'{"message":"Ownership fence"}',headers={'Content-Type':'application/json','X-Relay-Key':fixture['token']})
+print(json.dumps(json.load(urllib.request.urlopen(r))))
+""",fixture)['event_id']
+        target=wait(lambda:sql(f"SELECT id FROM deliveries WHERE event_id='{event}' AND status='processing'"))
+        wait(lambda:any(row['id']==target for row in started()))
+        sql(f"UPDATE deliveries SET attempts=2,locked_at=NOW() WHERE id='{target}'")
+        heartbeat=state/(target+'.heartbeat')
+        wait(lambda:heartbeat.exists())
+        wait(lambda:time.time()-heartbeat.stat().st_mtime>2,30)
+        assert not (state/(target+'.finished')).exists()
+        assert sql(f"SELECT status||':'||attempts FROM deliveries WHERE id='{target}'")=='processing:2'
+        print('PASS: losing an attempt lease cancels its Telegram subprocess and fences its completion',flush=True)
+    except BaseException:
+        try:
+            artifacts=Path(os.environ.get('RELAYIX_TEST_ARTIFACTS','/tmp/relayix-084-regression-artifacts'))/project
+            artifacts.mkdir(parents=True,exist_ok=True)
+            (artifacts/'compose.log').write_text(dc('logs','--no-color'))
+            run(['python3',str(ROOT/'tests/redact_artifacts.py'),str(artifacts),str(runtime/'credentials.json')])
+        except Exception:
+            pass
+        raise
+    finally:
+        dc('down','--volumes','--remove-orphans')
