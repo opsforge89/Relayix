@@ -29,7 +29,7 @@ fn candidate(
     limit: i64,
     proxy_limit: i64,
     lock: bool,
-) -> sqlx::QueryBuilder<'static, sqlx::Postgres> {
+) -> sqlx::QueryBuilder<sqlx::Postgres> {
     let table = match queue {
         Queue::Delivery => "deliveries",
         Queue::Alert => "alert_deliveries",
