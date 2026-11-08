@@ -276,10 +276,16 @@ fn truncate_field(text: &str, maximum: usize, unit: FieldUnit, suffix: &str) -> 
     }
     let budget = maximum.saturating_sub(field_cost(suffix, unit));
     let mut used = 0;
-    let prefix: String = text.chars().take_while(|ch| {
-        used += match unit { FieldUnit::Characters => 1, FieldUnit::Bytes => ch.len_utf8() };
-        used <= budget
-    }).collect();
+    let prefix: String = text
+        .chars()
+        .take_while(|ch| {
+            used += match unit {
+                FieldUnit::Characters => 1,
+                FieldUnit::Bytes => ch.len_utf8(),
+            };
+            used <= budget
+        })
+        .collect();
     format!("{prefix}{suffix}")
 }
 fn provider_fields(kind: &str, title: &str, body: &str) -> (String, String) {
@@ -324,9 +330,15 @@ pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
         if google_json_bytes(&full.text) <= 32000 {
             return full;
         }
-        return fit_google_source(&body, |prefix| render_unbounded(kind, &title, &format!("{prefix}\n\n[Message truncated]")))
-            .or_else(|| fit_google_source(&title, |prefix| render_unbounded(kind, prefix, "[Message truncated]")))
-            .unwrap_or_else(|| render_unbounded(kind, "", "[Message truncated]"));
+        return fit_google_source(&body, |prefix| {
+            render_unbounded(kind, &title, &format!("{prefix}\n\n[Message truncated]"))
+        })
+        .or_else(|| {
+            fit_google_source(&title, |prefix| {
+                render_unbounded(kind, prefix, "[Message truncated]")
+            })
+        })
+        .unwrap_or_else(|| render_unbounded(kind, "", "[Message truncated]"));
     }
     let limit = match kind {
         "telegram" => 4096,
@@ -361,7 +373,12 @@ mod tests {
     use super::*;
     #[test]
     fn separate_provider_fields_use_their_documented_units() {
-        let pushover = render("pushover", &json!({}), &"😀".repeat(251), &"😀".repeat(1500));
+        let pushover = render(
+            "pushover",
+            &json!({}),
+            &"😀".repeat(251),
+            &"😀".repeat(1500),
+        );
         assert_eq!(pushover.title.chars().count(), 250);
         assert_eq!(pushover.body.chars().count(), 1024);
         assert!(pushover.title.ends_with(" [truncated]"));

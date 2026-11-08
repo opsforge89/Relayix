@@ -19,7 +19,9 @@ pub(crate) struct ChannelInput {
 }
 pub(crate) fn valid_channel_name(name: &str) -> Result<()> {
     if name.trim().is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
-        return Err(anyhow!("Channel name must contain 1–100 characters and no control characters"));
+        return Err(anyhow!(
+            "Channel name must contain 1–100 characters and no control characters"
+        ));
     }
     Ok(())
 }
@@ -32,7 +34,10 @@ pub(crate) fn require_template_editor(
     old: Option<&Value>,
 ) -> std::result::Result<(), (StatusCode, Json<Value>)> {
     if role != "admin" && (has_body_template(config) || old.is_some_and(has_body_template)) {
-        return Err(err(StatusCode::FORBIDDEN, "Administrator required to manage channels with a webhook body template"));
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Administrator required to manage channels with a webhook body template",
+        ));
     }
     Ok(())
 }
@@ -116,7 +121,11 @@ pub(crate) fn mask(config: &mut Value) {
     }
 }
 pub(crate) fn restore_masked(config: &mut Value, old: &Value) {
-    for key in providers::SECRET_FIELDS.iter().copied().chain(std::iter::once("body_template")) {
+    for key in providers::SECRET_FIELDS
+        .iter()
+        .copied()
+        .chain(std::iter::once("body_template"))
+    {
         if config.get(key).and_then(Value::as_str) == Some("********") {
             if let Some(value) = old.get(key) {
                 config[key] = value.clone();
@@ -158,11 +167,12 @@ pub(crate) async fn update_channel(
     let principal = auth::authenticated(&h, &s).await?;
     valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let old: Option<(Value,)> = sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db_error)?;
+    let old: Option<(Value,)> =
+        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
     let old = old
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?
         .0;
@@ -192,8 +202,12 @@ pub(crate) async fn delete_channel(
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let config: Option<(Value,)> = sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
-        .bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    let config: Option<(Value,)> =
+        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
     if let Some((config,)) = config {
         require_template_editor(&principal.role, &config, None)?;
     }
@@ -379,12 +393,19 @@ mod access_tests {
         mask_for_role(&mut admin, "admin");
         assert_eq!(admin["body_template"], stored["body_template"]);
         assert_eq!(admin["url"], "********");
-        assert!(require_template_editor("member", &json!({"url":"https://other.example"}), Some(&stored)).is_err());
+        assert!(require_template_editor(
+            "member",
+            &json!({"url":"https://other.example"}),
+            Some(&stored)
+        )
+        .is_err());
         assert!(require_template_editor("member", &stored, None).is_err());
         assert!(require_template_editor("admin", &member, Some(&stored)).is_ok());
         restore_masked(&mut member, &stored);
         assert_eq!(member, stored);
-        assert!(require_template_editor("member", &json!({"url":"https://example.org"}), None).is_ok());
+        assert!(
+            require_template_editor("member", &json!({"url":"https://example.org"}), None).is_ok()
+        );
     }
     #[test]
     fn channel_names_are_validated_as_unicode_on_all_write_paths() {
