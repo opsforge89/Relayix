@@ -1,6 +1,8 @@
 # Relayix Agent Instructions
 
-Maintain this file in English.
+## Language
+
+Write all repository documentation and code in English only. This includes code comments, identifiers, developer-facing strings, UI/API messages, commit messages, pull request descriptions, and release notes. Maintain this file and AGENTS.md in English as well.
 
 ## Local Work
 
