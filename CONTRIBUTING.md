@@ -7,3 +7,7 @@ Run `python3 tests/deploy.py` to verify backup/rollback using fake Docker, then 
 Database migrations must be additive. Never edit applied migrations, rotate existing route keys or rename existing database volumes as part of a branding change. Preserve existing mailbox and provider configuration formats.
 
 Commit Cargo.lock and web/package-lock.json. Keep private deployment JSON, dotenv files, temporary test credentials, backups, database dumps, credentials, build outputs and browser screenshots out of source control. See [GitHub setup](docs/GITHUB.md) for CI and releases.
+
+Set the release version in `Cargo.toml`, run `python3 scripts/sync_release.py`, and add the changelog entry. The frontend embeds the Cargo version at build time; published OCI version labels are set by the release workflow. `python3 scripts/check_release.py` rejects stale generated manifests.
+
+Image builds enforce `cargo fmt --check`, Clippy with warnings denied, Rust tests, frontend ESLint and message-safety unit tests. CI also audits Cargo dependencies and scans the runtime image for fixable high/critical vulnerabilities. Dependency license texts and inventories are generated from locked build dependencies and installed Python distributions during the image build, under `/usr/share/doc/relayix/licenses`; keep vendored upstream notices beside their sources.

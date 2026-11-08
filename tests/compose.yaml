@@ -35,11 +35,12 @@ services:
     networks:
       default:
         aliases: [relayix.test]
-    image: ${RELAYIX_TEST_IMAGE:-relayix:0.8.1}
+    image: ${RELAYIX_TEST_IMAGE:-relayix:0.8.3}
     environment:
       DATABASE_URL: postgres://relayix:${RELAYIX_TEST_POSTGRES_PASSWORD:?generated test runtime required}@db:5432/relayix
       ADMIN_TOKEN: ${RELAYIX_TEST_ADMIN_TOKEN:?generated test runtime required}
       ALLOW_INSECURE_HTTP: 'true'
+      OUTBOUND_ALLOWLIST: '172.16.0.0/12,192.168.0.0/16,10.0.0.0/8'
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: ${RELAYIX_TEST_ADMIN_PASSWORD:?generated test runtime required}
       RETRY_BASE_SECONDS: '1'
@@ -51,7 +52,7 @@ services:
       proxy:
         condition: service_started
   checks:
-    image: ${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.8.1}
+    image: ${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.8.3}
     environment:
       RELAYIX_TEST_CREDENTIALS_FILE: /run/relayix-test/credentials.json
       RELAYIX_TEST_BASE_URL: ${RELAYIX_TEST_BASE_URL:?generated test runtime required}
@@ -71,7 +72,7 @@ services:
     environment:
       RELAYIX_TEST_CREDENTIALS_FILE: /run/relayix-test/credentials.json
       RELAYIX_TEST_BASE_URL: ${RELAYIX_TEST_BASE_URL:?generated test runtime required}
-    image: ${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.8.1}
+    image: ${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.8.3}
     volumes:
       - ${RELAYIX_TEST_RUNTIME_DIR:?generated test runtime required}:/run/relayix-test:ro
       - ./:/tests:ro

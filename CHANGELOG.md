@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.3 Beta — 2026-11-08
+
+- Block private and special-use outbound addresses, check DNS answers at connection time, disable redirects/environment proxies and add an explicit IP/CIDR `OUTBOUND_ALLOWLIST` for internal services. Pin SMTP and Telegram proxy addresses, retaining TLS hostnames.
+- Rate-limit login and webhook requests by peer IP, isolate failed-login windows by IP and username, and add CSP, frame denial, MIME sniffing protection and a referrer policy.
+- Bind the Compose host port to localhost by default and include a Caddy HTTPS example.
+- Run configurable parallel delivery workers, cap Telegram subprocesses, drain active deliveries on shutdown, check PostgreSQL readiness and include an image healthcheck.
+- Add configurable completed-history retention (30 days by default; 0 disables deletion), bounded maintenance, trigram search indexes and transactionally maintained event tags.
+- Format Rust, require Clippy and frontend ESLint in builds, audit dependencies and scan runtime images in CI. Split API modules from startup and parse adapter settings through a typed enum while preserving stored JSON.
+- Remove the package installer and its bundled vulnerable dependencies from the runtime image after installing locked transport packages.
+- Generate dependency license bundles at image build time and derive frontend/release manifests from the Cargo version.
+- Correct 0.8.2 preview test fixtures to include required template title fields.
+
+## 0.8.2 Beta — 2026-11-08
+
+- Preview and retry up to 500 final-failure deliveries matching current filters. Confirmation is account-owned, expires after 15 minutes and is idempotent; changed delivery states are skipped.
+- Preserve template versions, compare saved layouts and restore older content as a new version without changing event snapshots.
+- Add optional route payload validation for required fields, JSON types, numeric limits and safe HTTP/HTTPS URLs, with structured field errors before queueing.
+- Clone routes and templates into editable drafts; cloned routes receive fresh endpoints and keys on save.
+- Configure personal delivery failure subscriptions and recipients in My profile, with final-failure, first-error and threshold triggers, cooldown, test sends and isolated delivery history.
+- Compute template status from configurable passed/failed counter paths: failures take precedence; invalid or missing counters cannot imply success.
+
 ## 0.8.1 Beta — 2026-11-07
 
 - Reorder table columns with drag-and-drop or arrow buttons and save column order to the user account.

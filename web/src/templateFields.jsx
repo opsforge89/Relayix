@@ -17,7 +17,7 @@ export function collectPayloadFields(payload,prefix='',depth=0,result=[]){
  }
  return result;
 }
-export function TemplateFields({example,onInsert}){
+export function TemplateFields({example,onInsert,computedStatus=false}){
  const [category,setCategory]=useState('Message'),[search,setSearch]=useState(''),[layout,setLayout]=useState('cards');
  let payload={},invalid=false;try{payload=JSON.parse(example)}catch{invalid=true}
  const own=collectPayloadFields(payload),available=new Map(own.map(([key,,value])=>[key,value]));
@@ -26,7 +26,7 @@ export function TemplateFields({example,onInsert}){
  const group=groups.find(g=>g.name===category)||groups[0];
  const fields=(search?all:group.fields).filter(([key,description])=>`${key} ${description}`.toLowerCase().includes(search.toLowerCase()));
  return <section className="field-browser" aria-label="Template field library"><div className="field-browser-heading"><h3>Insert a field</h3><div className="field-layout" role="group" aria-label="Field display"><button type="button" aria-label="Cards with examples" aria-pressed={layout==='cards'} onClick={()=>setLayout('cards')}><LayoutGrid size={15}/></button><button type="button" aria-label="Compact field list" aria-pressed={layout==='list'} onClick={()=>setLayout('list')}><List size={15}/></button></div></div><label className="field-search"><Search size={15}/><input aria-label="Search template fields" placeholder="Search fields…" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="field-categories" role="group" aria-label="Field categories">{groups.map(g=><button type="button" key={g.name} aria-pressed={category===g.name} onClick={()=>{setCategory(g.name);setSearch('')}}>{g.name} <small>{g.fields.length}</small></button>)}</div><p className="helptext">{search?'Matching fields across all categories.':group.description}</p><p className="helptext">Click to insert at the cursor in the last focused title, message or link URL. Fields must be supplied in incoming JSON; examples are suggestions.</p>{invalid&&<p className="field-error">Fix the example JSON to detect available fields.</p>}<div className={`field-options ${layout}`}>
- {fields.map(([key,description,sample])=><button className="field-option" type="button" key={key} onClick={()=>onInsert(key)}><span className="field-option-key"><code>{`{{${key}}}`}</code><small className={available.has(key)?'field-available':'field-suggested'}>{available.has(key)?'In JSON':'Suggested'}</small></span><span>{description}</span><small className="field-sample">Example: {JSON.stringify(available.has(key)?available.get(key):sample)}</small></button>)}
+ {fields.map(([key,description,sample])=><button className="field-option" type="button" key={key} onClick={()=>onInsert(key)}><span className="field-option-key"><code>{`{{${key}}}`}</code><small className={available.has(key)||(computedStatus&&key==='status')?'field-available':'field-suggested'}>{computedStatus&&key==='status'?'Computed':available.has(key)?'In JSON':'Suggested'}</small></span><span>{description}</span><small className="field-sample">Example: {computedStatus&&key==='status'?'❌ / ✅ / ⚠️':JSON.stringify(available.has(key)?available.get(key):sample)}</small></button>)}
  {!fields.length&&<p className="helptext">{search?'No matching fields.':'Paste your JSON on the right to discover your own fields.'}</p>}
  </div></section>;
 }

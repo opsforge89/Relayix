@@ -14,7 +14,8 @@ Relayix receives webhooks and delivers notifications to your messengers and serv
 - One webhook for multiple recipients, with optional titles, tags and priority.
 - Automatic Telegram and Mattermost formatting for bold text and links.
 - Delivery history, per-channel diagnostics, retries and fallback recipients.
-- Optional user-created templates with JSON variables and preview.
+- Message templates with categorized JSON fields, computed test status, preview and version history.
+- Route payload validation, cloning, bulk retry and personal delivery failure alerts.
 - Light and dark themes, shared channels and individual user accounts.
 
 ## Quick start
@@ -34,7 +35,7 @@ chmod 600 .env
 docker compose up -d
 ```
 
-Open **http://SERVER_IP:8080** and sign in as **admin** with your chosen password. Compose downloads the published image and starts the app and PostgreSQL. No build is required.
+Open **http://127.0.0.1:8080** and sign in as **admin** with your chosen password. Compose downloads the published image and starts the app and PostgreSQL. No build is required. The port is bound to localhost; see [HTTPS and remote access](docs/DEPLOYMENT.md#https-with-caddy) for a server installation.
 
 **External PostgreSQL:** in the same `.env`, set `DATABASE_MODE=external` and your `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_DB` and `POSTGRES_PASSWORD`. Set `POSTGRES_SSLMODE=disable` without TLS or `verify-full` with TLS; `POSTGRES_CA_PATH` is optional. Use the same Compose command. [Database examples →](docs/DEPLOYMENT.md)
 
@@ -59,7 +60,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Current published image: `ghcr.io/opsforge89/relayix:0.8.1`.
+Release image: `ghcr.io/opsforge89/relayix:0.8.3`.
 
 Change the app image tag in `compose.yaml`, then run:
 
@@ -74,11 +75,11 @@ Keep your `.env` and database volume. Migrations run automatically.
 
 Current interface with fictional demonstration data.
 
-![Relayix 0.8.1 dashboard with compact channels, routes and delivery history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
+![Relayix 0.8.2 dashboard with compact channels, routes and delivery history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
 
-![Relayix 0.8.1 channels and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
+![Relayix 0.8.2 channels and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
 
-![Relayix 0.8.1 template editor with categorized fields and examples — light theme](docs/screenshots/relayix-template-editor-light.png)
+![Relayix 0.8.2 template editor with categorized fields and examples — light theme](docs/screenshots/relayix-template-editor-light.png)
 
 ## Documentation
 

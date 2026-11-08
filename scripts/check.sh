@@ -3,9 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export RELAYIX_TEST_PROJECT="${RELAYIX_TEST_PROJECT:-relayix-test-${GITHUB_RUN_ID:-local}-$$}"
 [[ "$RELAYIX_TEST_PROJECT" == relayix-test-* ]] || { echo 'Test project must start with relayix-test-' >&2; exit 1; }
-export RELAYIX_TEST_IMAGE="${RELAYIX_TEST_IMAGE:-relayix:0.8.1}"
-export RELAYIX_TEST_CHECKS_IMAGE="${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.8.1}"
-export RELAYIX_TEST_BROWSER_IMAGE="${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.8.1}"
+export RELAYIX_TEST_IMAGE="${RELAYIX_TEST_IMAGE:-relayix:0.8.3}"
+export RELAYIX_TEST_CHECKS_IMAGE="${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.8.3}"
+export RELAYIX_TEST_BROWSER_IMAGE="${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.8.3}"
 export RELAYIX_TEST_ARTIFACTS="${RELAYIX_TEST_ARTIFACTS:-/tmp/relayix-test-artifacts}"
 mkdir -p "$RELAYIX_TEST_ARTIFACTS"
 python3 scripts/check_release.py
@@ -36,3 +36,7 @@ docker build -f tests/browser.Dockerfile -t "$RELAYIX_TEST_BROWSER_IMAGE" tests
 "${compose[@]}" up -d db mock app
 "${compose[@]}" run --rm checks
 "${compose[@]}" run --rm browser
+
+"${compose[@]}" run --rm browser python /tests/release_082_browser.py
+"${compose[@]}" run --rm checks python /tests/release_083.py
+python3 tests/runtime_083.py

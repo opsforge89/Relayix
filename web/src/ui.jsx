@@ -8,6 +8,7 @@ import {RecipientChip,DeliveryLegend} from './deliveryStatus.jsx';
 import {RouteIcon} from './routeIcons.jsx';
 import {defaultFilters,monitoringPeriods} from './usePreferences.js';
 
+export const cloneName=value=>{let name=value;while(new TextEncoder().encode(`${name} copy`).length>100)name=Array.from(name).slice(0,-1).join('');return `${name} copy`};
 export const passwordChecks=(password,username='')=>[
  ['12–128 characters',password.length>=12&&password.length<=128],
  ['Uppercase and lowercase letters',/[A-Z]/.test(password)&&/[a-z]/.test(password)],
@@ -38,11 +39,11 @@ export function LoginView({onLogin,theme,toggleTheme}) {
  <ErrorMessage error={error}/><button className="primary full" disabled={busy}>{busy?'Signing in…':'Sign in'}</button></form><button className="link" onClick={()=>{setMode(mode==='password'?'token':'password');setError('')}}>{mode==='password'?'Use an API token':'Use username and password'}</button><button className="theme-standalone" aria-label="Switch theme" onClick={toggleTheme}>{theme==='dark'?'☀':'☾'}</button></div></div>;
 }
 
-export function ProfileView({user,busy,onSave,onLogout,error,preferences,onSavePreferences,preferencesStatus}) {
+export function ProfileView({user,busy,onSave,onLogout,error,preferences,onSavePreferences,preferencesStatus,deliveryAlerts}) {
  const [name,setName]=useState(user.display_name),[current,setCurrent]=useState(''),[password,setPassword]=useState(''),[confirm,setConfirm]=useState('');
  return <><PageHeading title="My profile" description="Your account, password and session."/><section className="panel profile-panel"><div className="profile-summary"><span className="profile-avatar">{user.display_name.slice(0,1).toUpperCase()}</span><div><h2>{user.display_name}</h2><p>@{user.username} · {user.role==='admin'?'Administrator':'Member'}</p><span className="status">{user.auth_method==='password'?'Password session':'API token session'}</span></div></div>
  {user.id?<form className="stack-form" onSubmit={async e=>{e.preventDefault();if(await onSave({display_name:name,current_password:current,new_password:password||undefined})){setCurrent('');setPassword('');setConfirm('')}}}><Field label="Display name"><input value={name} onChange={e=>setName(e.target.value)} required maxLength={100}/></Field><h3>Change password</h3><p className="helptext">Leave password fields empty to keep your current password. Changing it signs out your other sessions.</p><Field label="Current password"><input type="password" autoComplete="current-password" value={current} onChange={e=>setCurrent(e.target.value)} required={Boolean(password)}/></Field><Field label="New password"><input type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} maxLength={128}/></Field>{password&&<PasswordStrength password={password} username={user.username}/>}<Field label="Confirm new password"><input type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} required={Boolean(password)}/></Field>{confirm&&password!==confirm&&<p className="field-error">Passwords do not match</p>}<ErrorMessage error={error}/><button className="primary" disabled={busy||Boolean(password&&(!strongPassword(password,user.username)||password!==confirm))}>Save profile</button></form>:<p className="helptext">Sign in with your username and password to edit your personal profile. The administrator API token provides access to user management.</p>}
- <NotificationPreferences value={preferences.notification_timeout_seconds} onSave={onSavePreferences} status={preferencesStatus}/><div className="profile-signout"><button className="secondary" onClick={onLogout}>Sign out</button></div></section></>;
+ <NotificationPreferences value={preferences.notification_timeout_seconds} onSave={onSavePreferences} status={preferencesStatus}/>{deliveryAlerts}<div className="profile-signout"><button className="secondary" onClick={onLogout}>Sign out</button></div></section></>;
 }
 
 export function UsersView({users,currentUser,busy,error,onSave,onDelete}) {

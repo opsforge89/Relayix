@@ -30,7 +30,7 @@ chmod 600 .env
 docker compose up -d
 ```
 
-Compose pulls the ready-made images, starts PostgreSQL, waits for it to become ready and starts Relayix. Open **`http://SERVER_IP:8080`** in your browser and sign in as **`admin`** with your `ADMIN_PASSWORD`. Schema migrations and the initial administrator account are created automatically. The first startup may take a few minutes while images download.
+Compose pulls the ready-made images, starts PostgreSQL, waits for it to become ready and starts Relayix. Open **`http://127.0.0.1:8080`** in your browser and sign in as **`admin`** with your `ADMIN_PASSWORD`. Schema migrations and the initial administrator account are created automatically. The first startup may take a few minutes while images download.
 
 The containers are named `relayix-app` and `relayix-db` and share `relayix-network`. PostgreSQL is available only inside that network. Its data persists in a named Docker volume.
 
@@ -59,7 +59,7 @@ chmod 600 .env
 docker compose up -d
 ```
 
-Open `http://SERVER_IP:8080` and sign in as `admin`. In external mode, only Relayix starts; the bundled PostgreSQL service is disabled.
+Open `http://127.0.0.1:8080` and sign in as `admin`. In external mode, only Relayix starts; the bundled PostgreSQL service is disabled.
 
 ### Without TLS
 
@@ -100,7 +100,7 @@ All settings go in `.env`; no JSON generator is needed.
 | `DATABASE_MODE` | `local` | `local` starts bundled PostgreSQL; `external` uses your existing server |
 | `POSTGRES_CA_PATH` | Empty | Optional host path to a PostgreSQL CA certificate |
 | `ADMIN_USERNAME` | `admin` | Initial administrator username |
-| `BIND_ADDRESS` | `0.0.0.0` | Listen on all host interfaces; use `127.0.0.1` for host-only access |
+| `BIND_ADDRESS` | `127.0.0.1` | Local host access; use the included Caddy example for HTTPS |
 | `PORT` | `8080` | Web UI and webhook port on the Docker host |
 | `COOKIE_SECURE` | `false` | Set `true` when serving the UI behind HTTPS |
 | `ADMIN_TOKEN` | Empty | Optional administrator API token for automation |
@@ -150,3 +150,30 @@ Existing private-JSON installations and GitHub-hosted deployment settings are do
 Run `docker compose logs app` if the application exits. Configuration checks validate `PORT`, boolean settings, retry timing and paired Telegram application credentials. PostgreSQL errors identify authentication (`POSTGRES_USER` / `POSTGRES_PASSWORD`), database name (`POSTGRES_DB`), TLS (`POSTGRES_SSLMODE` / `POSTGRES_SSLROOTCERT`, mounted via `POSTGRES_CA_PATH`) or network (`POSTGRES_HOST` / `POSTGRES_PORT`). Installations using `DATABASE_URL` should check the equivalent URL fields. Credentials and full connection URLs are omitted.
 
 With both Telegram application credentials empty, direct/HTTP Bot API delivery remains available; MTProto/WEB checks report the missing settings. The application does not request Telegram login codes or create API credentials.
+
+## HTTPS with Caddy
+
+The default host binding is now `127.0.0.1:8080`. For remote administration without public exposure, use `ssh -L 8080:127.0.0.1:8080 your-server` and open `http://127.0.0.1:8080` locally.
+
+For a public endpoint, point a domain at the server, install Caddy on the host, and allow inbound ports 80 and 443. Keep `BIND_ADDRESS=127.0.0.1`, set `COOKIE_SECURE=true` in `.env`, and recreate the application:
+
+```bash
+docker compose up -d --no-deps app
+sudo env RELAYIX_DOMAIN=notify.example.org caddy run --config deploy/Caddyfile --adapter caddyfile
+```
+
+The included Caddyfile enables automatic HTTPS and proxies to the local application. Run Caddy under your service manager for persistent operation, with the same `RELAYIX_DOMAIN` environment variable. Open `https://notify.example.org` and use that origin for webhook endpoints.
+
+## Outbound policy and runtime limits (0.8.3)
+
+Private, loopback, link-local, multicast and reserved destination addresses are denied by default, including DNS answers, SMTP servers and channel proxies. DNS answers for direct HTTP requests are checked by the resolver used for the actual connection. Redirects and implicit environment proxies are disabled. SMTP and Telegram proxy connections use checked, pinned addresses while SMTP retains the original TLS hostname.
+
+For an internal Gotify/ntfy or SMTP server, explicitly list its IP or subnet, for example `OUTBOUND_ALLOWLIST=192.168.10.5/32,fd12:3456::5/128`. This administrative setting trusts these destinations for all channel creators; prefer individual addresses. `ALLOW_INSECURE_HTTP=true` permits HTTP separately and does not bypass address checks. HTTP proxies resolve HTTP destinations themselves: use only trusted proxies, enforce the same destination restrictions on the proxy, and restrict its egress. Database connections use their existing separate database configuration.
+
+Login permits 60 requests per minute per peer IP, with an additional 10-failure window per IP and username for 15 minutes. Webhooks permit 600 requests per minute per peer IP across routes; rejection returns 429 with `Retry-After`. Counters are bounded in memory and reset on application restart. Forwarded headers are ignored, so a reverse proxy shares its quota across clients; apply additional client-IP limits at the proxy. Multiple application replicas have independent request quotas.
+
+`DELIVERY_WORKERS=4` controls concurrent normal deliveries (1–32). Telegram subprocesses have a separate limit of four across diagnostics and deliveries. Shutdown stops new claims and drains active work; Compose allows 75 seconds. Expired leases recover interrupted work on startup. `/healthz` checks PostgreSQL and returns 503 when it is unavailable; the image includes a healthcheck.
+
+`EVENT_RETENTION_DAYS=30` removes completed history older than 30 days, including delivery attempts and alert history. Set `0` to keep history indefinitely. Maintenance runs once per minute in batches of up to 1,000 events and 1,000 alerts, preserving events with queued/processing deliveries. Sessions, expired retry confirmations and login windows are also cleaned. Back up history before upgrading if you need to retain more than 30 days, and set the retention value before startup.
+
+The migration installs PostgreSQL's trusted `pg_trgm` extension for substring-search indexes; the migration role needs `CREATE` on the database, or an administrator must install the extension first. Index creation on a large existing history can extend migration time. Distinct event tags are maintained transactionally so tag suggestions no longer scan all events.

@@ -10,30 +10,30 @@ The local origin is connected to https://github.com/opsforge89/Relayix.git and b
 git remote -v  # origin: https://github.com/opsforge89/Relayix.git
 git add .
 git diff --cached --stat
-git commit -m "Prepare Relayix 0.8.1 Beta"
+git commit -m "Prepare Relayix 0.8.3 Beta"
 git push -u origin main
 ```
 
-Private configuration, local backups, dumps, image exports and generated outputs are ignored. Review staged files before the first commit. Relayix original source is Apache-2.0; preserve LICENSE, NOTICE, LICENSES and THIRD_PARTY_NOTICES.md when distributing. Review the third-party inventory and run the secret checks before publication.
+Private configuration, local backups, dumps, image exports and generated outputs are ignored. Review staged files before the first commit. Relayix original source is Apache-2.0; preserve LICENSE, NOTICE and THIRD_PARTY_NOTICES.md, together with the dependency licenses generated into the runtime image, when distributing. Review the third-party inventory and run the secret checks before publication.
 
 In repository settings enable Actions and Packages. Protect `main` and require the `verify` job before merging. Enable private vulnerability reporting and secret scanning if available. Dependabot is configured for Rust, npm and Actions.
 
 ## Continuous integration
 
-`Verify` runs on pull requests, pushes to `main` and manual dispatch. Updates limited to `README.md`, `docs/` and the CI definition itself keep the required `verify` check but skip image builds and all application tests, running only the lightweight private-file scan. Changes to application files, release-tag verification and manual verification retain the full build/test flow. It builds the Docker image with `cargo test --locked --release`, compiles the React app using `npm ci`, and runs `scripts/check.sh --skip-app-build`. Tests use an isolated PostgreSQL, local SMTP/HTTP mocks and Chromium. Test resources are cleaned up even on failure. Screenshots and failure logs are uploaded for seven days. Fork PRs run without registry publishing credentials.
+`Verify` runs on pull requests, pushes to `main` and manual dispatch. Updates limited to `README.md` and `docs/` keep the required `verify` check but skip image builds and all application tests, running only the lightweight private-file scan. Changes to application files, release-tag verification and manual verification retain the full build/test flow. It builds the Docker image with Rust formatting, Clippy and `cargo test --locked --release`, checks the React app with ESLint and unit tests, audits Cargo dependencies, scans the runtime image for fixable HIGH/CRITICAL vulnerabilities, and runs `scripts/check.sh --skip-app-build`. Tests use an isolated PostgreSQL, local SMTP/HTTP mocks and Chromium. Test resources are cleaned up even on failure. Screenshots and failure logs are uploaded for seven days. Fork PRs run without registry publishing credentials.
 
 ## Continuous delivery
 
 When a tested version is ready:
 
 ```bash
-git tag v0.8.1
-git push origin v0.8.1
+git tag v0.8.3
+git push origin v0.8.3
 ```
 
-`Release Docker image` runs the complete CI again, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.1` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
+`Release Docker image` runs the complete CI again, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.3` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
 
-`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.1`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
+`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.3`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
 
 Container package visibility is controlled in GitHub Packages. For anonymous pulls set the package public. For private pulls authenticate on the deployment host with a token allowed to read that package; do not commit the credential.
 

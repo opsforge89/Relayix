@@ -27,7 +27,8 @@ for key in ('TELEGRAM_API_ID', 'TELEGRAM_API_HASH'):
 defaults = json.loads((ROOT / 'config/deployment.example.json').read_text())
 variables = {}
 for key in ('DATABASE_MODE', 'ADMIN_USERNAME', 'BIND_ADDRESS', 'PORT', 'COOKIE_SECURE',
-            'POSTGRES_IMAGE', 'POSTGRES_CLIENT_IMAGE', 'ALLOW_INSECURE_HTTP', 'RUST_LOG'):
+            'POSTGRES_IMAGE', 'POSTGRES_CLIENT_IMAGE', 'ALLOW_INSECURE_HTTP', 'RUST_LOG',
+            'OUTBOUND_ALLOWLIST', 'DELIVERY_WORKERS', 'EVENT_RETENTION_DAYS'):
     variables['RELAYIX_' + key] = config.get(key, defaults[key])
 for key, field in (('POSTGRES_HOST', 'host'), ('POSTGRES_PORT', 'port'),
                    ('POSTGRES_USER', 'user'), ('POSTGRES_DB', 'database'),

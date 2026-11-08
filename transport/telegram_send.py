@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import sys
+import socket
+import ipaddress
 import uuid
 from urllib.parse import urlsplit
 from telethon import TelegramClient, connection, functions, types, errors
@@ -126,12 +128,26 @@ def error_code(exc):
     return 'delivery'
 
 
+def pin_proxy_dns(cfg):
+    """Preserve the WEB TLS hostname while using the address checked by Rust."""
+    if cfg.get('proxy_type')!='webproxy':return
+    host=cfg['outbound_proxy_host'].encode('idna').decode().lower()
+    address=str(ipaddress.ip_address(cfg['outbound_proxy_ip']))
+    original=socket.getaddrinfo
+    def pinned(name,port,*args,**kwargs):
+        if isinstance(name,bytes):name=name.decode('ascii')
+        if name.lower().rstrip('.')!=host:raise OSError('Unapproved proxy DNS lookup')
+        return original(address,port,*args,**kwargs)
+    socket.getaddrinfo=pinned
+
+
 def main():
     try:
         raw = sys.stdin.buffer.read(128 * 1024 + 1)
         if len(raw) > 128 * 1024:
             raise ValueError('Request too large')
         data = json.loads(raw)
+        pin_proxy_dns(data['config'])
         if data.get('action') == 'diagnose':
             steps = asyncio.run(asyncio.wait_for(diagnose(data), timeout=45))
             print(json.dumps({'ok': True, 'steps': steps}))

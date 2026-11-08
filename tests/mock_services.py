@@ -1,5 +1,6 @@
 """Local HTTP providers and SMTP relay; never contacts real services."""
 import json
+import time
 from runtime import credentials
 import socketserver
 import threading
@@ -49,6 +50,7 @@ class HTTP(BaseHTTPRequestHandler):
             self.reply(404, {})
 
     def do_POST(self):
+        if self.path=='/slow':time.sleep(5)
         body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
         with lock:
             received.append({'path': self.path, 'method': self.command, 'body': body,

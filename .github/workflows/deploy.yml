@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published numeric version, for example 0.8.1
+        description: Published numeric version, for example 0.8.3
         required: true
         type: string
 permissions:
@@ -48,6 +48,9 @@ jobs:
           POSTGRES_IMAGE: ${{ vars.RELAYIX_POSTGRES_IMAGE }}
           POSTGRES_CLIENT_IMAGE: ${{ vars.RELAYIX_POSTGRES_CLIENT_IMAGE }}
           ALLOW_INSECURE_HTTP: ${{ vars.RELAYIX_ALLOW_INSECURE_HTTP }}
+          OUTBOUND_ALLOWLIST: ${{ vars.RELAYIX_OUTBOUND_ALLOWLIST }}
+          DELIVERY_WORKERS: ${{ vars.RELAYIX_DELIVERY_WORKERS }}
+          EVENT_RETENTION_DAYS: ${{ vars.RELAYIX_EVENT_RETENTION_DAYS }}
           RUST_LOG: ${{ vars.RELAYIX_RUST_LOG }}
           RELAYIX_DB_VOLUME: ${{ vars.RELAYIX_DB_VOLUME }}
           TELEGRAM_API_ID: ${{ secrets.RELAYIX_TELEGRAM_API_ID }}
