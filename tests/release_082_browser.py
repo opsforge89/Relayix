@@ -26,7 +26,7 @@ with sync_playwright() as p:
   preferences=ok(setup.get('/api/auth/me'))['preferences']
   # Earlier browser scenarios deliberately persist filters; this suite owns its own fixtures.
   ok(setup.put('/api/auth/preferences',data={**preferences,'list_search':'','route_tag_filter':'','page_size':50,'delivery_filters':{key:'' for key in ['status','channel_id','route_id','event_id','from','to','search','tag','period']}}))
-  for name,path in [('082 UI failed destination','fail'),('082 UI independent alerts','ui082-alerts')]:
+  for name,path in [('082 UI failed destination','resilience088/ui082/auth'),('082 UI independent alerts','ui082-alerts')]:
    channels.append(ok(api.post('/api/channels',data={'name':name,'kind':'webhook','enabled':True,'config':{'url':'http://mock:8000/'+path}}))['id'])
   original=ok(api.post('/api/routes',data={'name':'082 UI route','channel_ids':[channels[0]]}));routes.append(original['id'])
   page.goto(BASE)
