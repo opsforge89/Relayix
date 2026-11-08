@@ -93,7 +93,13 @@ async fn verify(password: String, encoded: String) -> bool {
     let Ok(permit) = PASSWORD_WORK.acquire().await else {
         return false;
     };
-    let verified = tokio::task::spawn_blocking(move || {
+    let verified = verify_password(password, encoded).await;
+    drop(permit);
+    verified
+}
+
+async fn verify_password(password: String, encoded: String) -> bool {
+    tokio::task::spawn_blocking(move || {
         PasswordHash::new(&encoded)
             .map(|hash| {
                 Argon2::default()
@@ -103,9 +109,7 @@ async fn verify(password: String, encoded: String) -> bool {
             .unwrap_or(false)
     })
     .await
-    .unwrap_or(false);
-    drop(permit);
-    verified
+    .unwrap_or(false)
 }
 
 fn session_token(h: &HeaderMap) -> Option<&str> {
@@ -216,6 +220,14 @@ pub async fn login(
         .execute(&s.db)
         .await
         .map_err(db_error)?;
+    // Check failure budgets after joining the bounded password-work queue. A
+    // distributed burst must not pre-admit unlimited checks before failures land.
+    let password_permit = PASSWORD_WORK.acquire().await.map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Password verification unavailable",
+        )
+    })?;
     let failures: Option<(i32,)> =
         sqlx::query_as("SELECT failures FROM login_attempts WHERE username=$1")
             .bind(&attempt_key)
@@ -252,7 +264,8 @@ pub async fn login(
         Some((_, encoded, _)) => encoded.clone(),
         None => s.dummy_password_hash.as_ref().clone(),
     };
-    let valid = verify(input.password, encoded).await && row.as_ref().map(|r| r.2).unwrap_or(false);
+    let valid = verify_password(input.password, encoded).await
+        && row.as_ref().map(|r| r.2).unwrap_or(false);
     if !valid {
         sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
             .bind(&attempt_key).bind(&account_key).execute(&s.db).await.map_err(db_error)?;
@@ -268,6 +281,7 @@ pub async fn login(
         .execute(&s.db)
         .await
         .map_err(db_error)?;
+    drop(password_permit);
     sqlx::query("DELETE FROM sessions WHERE expires_at<NOW()")
         .execute(&s.db)
         .await
