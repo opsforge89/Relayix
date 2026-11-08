@@ -57,7 +57,7 @@ with sync_playwright() as p:
             page.wait_for_timeout(200)
         assert state['state']=='paused'
         page.locator('nav').get_by_role('button',name='Channels',exact=True).click()
-        page.get_by_role('button',name='Refresh',exact=True).click()
+        page.get_by_role('button',name='Refresh data',exact=True).click()
         card=page.locator('.channel-entry').filter(has=page.get_by_text('088 UI paused',exact=True))
         expect(card.get_by_text('Paused',exact=True)).to_be_visible();expect(card).to_contain_text('Queued messages are retained')
         assert not errors,errors

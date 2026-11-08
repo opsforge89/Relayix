@@ -1,5 +1,5 @@
 //! Shared webhook routing and diagnostics, including authenticated UI tests.
-use crate::{auth, db_error, err, hash, ApiResult, AppState};
+use crate::{auth, db_error, err, hash, message, ApiResult, AppState, Channel};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},

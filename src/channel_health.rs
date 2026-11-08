@@ -30,7 +30,7 @@ pub async fn record(
     Ok(())
 }
 
-pub async fn status(db: &PgPool, channel: Uuid) -> Result<Value> {
+pub async fn status(db: &PgPool, channel: Uuid) -> sqlx::Result<Value> {
     let value: Option<(Value,)> = sqlx::query_as("SELECT jsonb_build_object('consecutive_failures',consecutive_failures,'last_error',last_error,'paused_until',paused_until,'state',CASE WHEN paused_until>NOW() THEN 'paused' WHEN paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channel_health WHERE channel_id=$1")
         .bind(channel).fetch_optional(db).await?;
     Ok(value.map(|v| v.0).unwrap_or_else(|| json!({"state":"healthy","consecutive_failures":0,"paused_until":null,"last_error":null})))
