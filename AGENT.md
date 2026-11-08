@@ -15,8 +15,8 @@ Write all repository documentation and code in English only. This includes code 
 Follow this sequence:
 
 1. Prepare a PR with the code, Cargo version, synchronized release manifests, changelog, and documentation.
-2. Merge the PR into `main` when the user has authorized publication.
-3. PRs run only lightweight Rust formatting, Clippy and ESLint checks on GitHub, without Docker or integration tests.
+2. Run only lightweight Rust formatting, Clippy and ESLint PR checks on GitHub, without Docker or integration tests.
+3. Merge the PR into `main` when the user has authorized publication.
 4. A push to `main` starts the full suite once. Changes limited to `docs/**` and root `*.md` files skip PR/release workflows.
 5. Build the production candidate once under `sha-<commit>` and the verification target in one Bake invocation, sharing the same runtime graph. Candidate tags are unverified staging artifacts, never releases.
 6. Pin the production digest and run all runtime/integration tests against that exact candidate. The verification target enforces Rust/frontend checks; validate that its runtime layers match the candidate.

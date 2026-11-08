@@ -2,7 +2,7 @@
 
 Use a feature branch and describe the problem, final behavior and relevant validation in the pull request. Keep the English UI consistent across light/dark themes and mobile widths.
 
-The release workflow runs all tests on GitHub before building/publishing the production image; PRs run Docker-free formatting/Clippy/ESLint checks; main runs the full suite once. Documentation-only changes skip both workflows. For optional developer reproduction, `python3 tests/deploy.py` verifies backup/rollback using fake Docker and `scripts/check.sh` uses Docker and Docker Compose v2. It builds the locked Rust/React application and runs API, queue, SMTP and Chromium checks against temporary databases and local mock providers. It never uses production credentials or sends to real channels. Screenshots and failure logs go to `/tmp/relayix-test-artifacts`.
+PRs run Docker-free formatting/Clippy/ESLint checks on GitHub. A main push runs the full suite once against the production candidate before digest promotion; documentation-only changes skip both workflows. Keep tests and builds on GitHub Actions, not in the local workspace. The full workflow runs `python3 tests/deploy.py` for backup/rollback with fake Docker, then `scripts/check.sh --skip-app-build` against the pinned candidate. API, queue, SMTP and Chromium checks use temporary databases and local mock providers, never production credentials or real notification recipients. Screenshots and failure logs are uploaded as CI artifacts.
 
 Database migrations must be additive. Never edit applied migrations, rotate existing route keys or rename existing database volumes as part of a branding change. Preserve existing mailbox and provider configuration formats.
 
