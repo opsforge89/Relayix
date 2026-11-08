@@ -94,7 +94,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           REVISION: ${{ github.sha }}
         run: |
-          skopeo copy --all --preserve-digests --dest-authfile "$HOME/.docker/config.json" \
+          skopeo copy --all --preserve-digests --dest-authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
             --digestfile /tmp/relayix-promoted-digest \
             oci-archive:/tmp/relayix-promote/relayix-candidate.tar:candidate "docker://$IMAGE:sha-$REVISION"
           expected="${IMAGE_REF##*@}"

@@ -86,7 +86,7 @@ try:
     for c in bundle['channels']:
         assert not any(k in c['config'] for k in ['url','bot_token','token','access_token','password','proxy_secret','api_hash','body_template'])
     assert not any('slug' in r or 'token_hash' in r or 'token' in r for r in bundle['routes'])
-    bad_bundle=json.loads(encoded);bad_bundle['channels'][0]['config']['token']='not-importable'
+    bad_bundle=json.loads(encoded);bad_bundle['channels'][0]['config']['token']=uuid.uuid4().hex
     assert request('/api/config/import',bad_bundle)[0]==400
     assert {c['id'] for c in ok('/api/channels')}==before_channels
     result=ok('/api/config/import',bundle)
