@@ -81,20 +81,37 @@ pub async fn event_details(
     value["has_title"] = json!(has_title);
     Ok(Json(value))
 }
+#[derive(FromRow)]
+struct AttemptSummary {
+    attempts: i32,
+    status: String,
+    is_fallback: bool,
+    error: Option<String>,
+    next_attempt_at: DateTime<Utc>,
+    channel_id: Uuid,
+    error_category: Option<String>,
+}
 pub async fn attempts(
     State(s): State<AppState>,
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let delivery: Option<(i32, String, bool, Option<String>, DateTime<Utc>, Uuid, Option<String>)> =
+    let delivery: Option<AttemptSummary> =
         sqlx::query_as("SELECT attempts,status,is_fallback,error,next_attempt_at,channel_id,error_category FROM deliveries WHERE id=$1")
             .bind(id)
             .fetch_optional(&s.db)
             .await
             .map_err(db_error)?;
-    let (total, status, is_fallback, error, next_attempt_at, channel_id, error_category) =
-        delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
+    let AttemptSummary {
+        attempts: total,
+        status,
+        is_fallback,
+        error,
+        next_attempt_at,
+        channel_id,
+        error_category,
+    } = delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
     let items:Vec<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('number',number,'started_at',started_at,'finished_at',finished_at,'status',status,'error',error,'error_category',error_category) FROM delivery_attempts WHERE delivery_id=$1 ORDER BY number DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db_error)?;
     let health = channel_health::status(&s.db, channel_id)
         .await
