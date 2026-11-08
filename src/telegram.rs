@@ -125,6 +125,21 @@ pub async fn transport(
     validate(cfg)?;
     static TRANSPORT_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
     let _permit = TRANSPORT_SLOTS.acquire().await?;
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        transport_inner(cfg, text, delivery_id, diagnose, html),
+    )
+    .await
+    .map_err(|_| anyhow!("Delivery attempt timed out"))?
+}
+
+async fn transport_inner(
+    cfg: &Value,
+    text: &str,
+    delivery_id: Uuid,
+    diagnose: bool,
+    html: bool,
+) -> Result<Value> {
     network::validate(cfg).await?;
     let mut pinned = cfg.clone();
     if proxy::mode(cfg) == "webproxy" {

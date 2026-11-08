@@ -15,11 +15,17 @@ with tempfile.TemporaryDirectory(prefix='relayix-compose-model-') as directory:
   assert settings['POSTGRES_PASSWORD'] not in result.stderr
   return json.loads(result.stdout)
  local=model({**config,'RELAYIX_IMAGE':'unused-legacy-image:0.6.1'})
- assert local['services']['app']['image']=='ghcr.io/opsforge89/relayix:0.8.4'
+ assert local['services']['app']['image']=='ghcr.io/opsforge89/relayix:0.8.5'
  assert set(local['services'])=={'app','db'}
  assert local['services']['app']['container_name']=='relayix-test-model-app'
  assert local['services']['db']['container_name']=='relayix-test-model-db'
  assert local['networks']['default']['name']=='relayix-test-model-network'
+ assert local['networks']['default']['ipam']['config']==[{'subnet':'172.30.84.0/24','gateway':'172.30.84.1'}]
+ assert local['services']['app']['environment']['TRUSTED_PROXIES']=='172.30.84.1'
+ custom_network=model({**config,'RELAYIX_NETWORK_SUBNET':'172.30.85.0/24','RELAYIX_NETWORK_GATEWAY':'172.30.85.1'})
+ assert custom_network['services']['app']['environment']['TRUSTED_PROXIES']=='172.30.85.1'
+ disabled=model({**config,'TRUSTED_PROXIES':''})
+ assert disabled['services']['app']['environment']['TRUSTED_PROXIES']==''
  uri=urlsplit(local['services']['app']['environment']['DATABASE_URL'])
  assert uri.hostname=='db' and unquote(uri.password)==config['POSTGRES_PASSWORD']
  assert unquote(uri.username)==config['POSTGRES_USER'] and unquote(uri.path[1:])==config['POSTGRES_DB']

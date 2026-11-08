@@ -149,6 +149,18 @@ for mode in (sys.argv[1:] or ('local', 'external', 'external-tls')):
                     assert run('docker', 'inspect', identifier, '--format', '{{.Name}}').strip() == '/' + project + '-' + service
                     networks = json.loads(run('docker', 'inspect', identifier, '--format', '{{json .NetworkSettings.Networks}}'))
                     assert set(networks) == {project + '-network'}
+            if mode == 'local':
+                # Recreate the bridge without deleting volumes; gateway and trust stay stable.
+                dc('down')
+                dc('up', '-d', '--wait', '--wait-timeout', '90')
+                container = dc('ps', '-q', 'app').strip()
+                attached = json.loads(run('docker', 'inspect', container, '--format', '{{json .NetworkSettings.Networks}}'))
+                assert attached[project+'-network']['Gateway']=='172.30.84.1'
+                runtime_env = json.loads(run('docker', 'inspect', container, '--format', '{{json .Config.Env}}'))
+                assert 'TRUSTED_PROXIES=172.30.84.1' in runtime_env
+                database = dc('ps', '-q', 'db').strip()
+                assert run('docker', 'exec', database, 'psql', '-U', 'relayix', '-d', 'relayix', '-Atc',
+                           'SELECT value FROM compose_upgrade_probe;').strip() == 'preserved'
             # Recreating the app must preserve data and the existing login.
             dc('up', '-d', '--no-deps', '--force-recreate', 'app')
             for attempt in range(60):

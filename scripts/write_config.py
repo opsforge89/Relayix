@@ -18,7 +18,7 @@ if args.base:
     config.update(json.loads(base.read_text()))
 # The app image is selected in compose.yaml, not in private settings.
 config.pop('RELAYIX_IMAGE',None)
-keys=set(config)|{'POSTGRES_PASSWORD','ADMIN_TOKEN','ADMIN_PASSWORD'}
+keys=set(config)|{'POSTGRES_PASSWORD','ADMIN_TOKEN','ADMIN_PASSWORD','TRUSTED_PROXIES'}
 for key in keys:
     if os.environ.get(key):config[key]=os.environ[key]
 if args.database:config['DATABASE_MODE']=args.database

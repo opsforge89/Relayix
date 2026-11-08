@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.request import build_opener,ProxyHandler,Request
 import json,os,secrets,socket,subprocess,sys,tempfile,time
 ROOT=Path(__file__).resolve().parents[1]
-IMAGE=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.4')
+IMAGE=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.5')
 PG_IMAGE='postgres:17.11-trixie'
 
 def free_port():
@@ -39,7 +39,7 @@ def exercise(mode,folder):
  env['RELAYIX_IMAGE_OVERRIDE']=IMAGE
  args=[str(ROOT/'scripts/compose.sh')]
  if mode!='local':
-  override.write_text('networks:\n  default:\n    external: true\n    name: '+network+'\n')
+  override.write_text('networks:\n  default:\n    ipam: !reset null\n    external: true\n    name: '+network+'\n')
   args+=['-f',str(override)]
  def compose(tail,**kwargs):return subprocess.run(args+tail,cwd=ROOT,env=env,capture_output=True,check=True,**kwargs)
  try:
