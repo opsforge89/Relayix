@@ -52,10 +52,7 @@ pub async fn claim_channel(
         .push_bind(limit)
         .push(" FROM channels c WHERE c.id=")
         .push_bind(channel);
-    let capacity: bool = capacity
-        .build_query_scalar()
-        .fetch_one(&mut **tx)
-        .await?;
+    let capacity: bool = capacity.build_query_scalar().fetch_one(&mut **tx).await?;
     Ok(capacity.then_some(channel))
 }
 
