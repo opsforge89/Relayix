@@ -204,12 +204,25 @@ The account throttle slows distributed guessing to roughly 30 admitted checks pe
 
 ## Delivery content and portable configuration
 
-Telegram and Discord deliveries are truncated with `[Message truncated]` when they exceed their provider budgets. Full incoming content remains in event history. Telegram source text is shortened and rendered again so tags/entities remain intact; the conservative 4096 UTF-16-unit budget includes generated HTML. Discord uses a conservative 2000 UTF-16-unit budget. Truncation sends one notification, avoiding partial multi-message duplicates on retry.
+Provider deliveries are truncated with an explicit marker when they exceed the documented budgets below. Full incoming content remains in event history. Telegram source text is shortened and rendered again so tags/entities remain intact; the conservative 4096 UTF-16-unit budget includes generated HTML. Discord uses a conservative 2000 UTF-16-unit budget. Truncation sends one notification, avoiding partial multi-message duplicates on retry.
 
-Generic webhook channels accept an optional JSON-object `config.body_template`. Variables in JSON values are `{{title}}`, `{{message}}`, `{{priority}}` and `{{source}}`. A value equal to `{{priority}}` becomes a number; embedded variables remain text. Values are JSON-escaped, not evaluated as code or recursively expanded. Templates are limited to 16 KiB/16 nesting levels, rendered bodies to 64 KiB. Without a template the original standard payload is unchanged. Do not put credentials in body templates: authenticated configuration users can read them.
+| Provider | Message budget | Separate title budget |
+| --- | --- | --- |
+| Telegram | 4096 UTF-16 units, conservatively including generated HTML | Included in message |
+| Discord | 2000 UTF-16 units | Included in message |
+| [Pushover](https://pushover.net/api#limits) | 1024 Unicode characters | 250 Unicode characters |
+| [ntfy](https://docs.ntfy.sh/publish/#limitations) | 4096 UTF-8 bytes | 1024 UTF-8 bytes |
+| [Google Chat](https://developers.google.com/workspace/chat/create-messages) | 32,000 bytes for the serialized JSON message, including escaping/envelope | Included in message |
+
+Pushover/ntfy bodies and titles are shortened independently, since their adapters send separate fields. UTF-8 byte limits never split a Unicode character. Title truncation uses a single-line ` [truncated]` suffix. Google Chat text under 32,000 JSON bytes is retained even if it exceeds 4096 characters.
+
+
+Generic webhook channels accept an optional JSON-object `config.body_template`. Variables in JSON values are `{{title}}`, `{{message}}`, `{{priority}}` and `{{source}}`. A value equal to `{{priority}}` becomes a number; embedded variables remain text. Values are JSON-escaped, not evaluated as code or recursively expanded. Templates are limited to 16 KiB/16 nesting levels, rendered bodies to 64 KiB. Without a template the original standard payload is unchanged. Body templates are visible and editable only by administrators; members receive a whole-template placeholder. Creating/editing/deleting a channel with a body template and diagnosing overridden draft settings require administrator access. This prevents redirecting a hidden template key through a changed URL/proxy. Members can still use the approved destination for ordinary deliveries and read-only stored diagnostics.
 
 Routes optionally set `rate_limit_per_minute` (0 disables the extra limit, up to 1,000,000). This quota is PostgreSQL-coordinated across client IPs and replicas and applies to accepted events/actual route tests, in addition to client-IP quotas. Preview and idempotent duplicates consume no extra quota. A rejection returns 429; public webhook responses include `Retry-After: 60`.
 
 Administrators can export/import channels and routes in Settings → Configuration transfer, or use `GET /api/config/export` and `POST /api/config/import`. Exports omit credentials, endpoint URLs, custom webhook bodies, original route endpoints/keys, message-template bindings, user data and history. Nonsecret channel settings, route validation/rate limits and recipient mappings are retained. Review names and other freeform metadata before sharing.
 
 Imports are atomic and append-only, limited to schema version 1, 500 channels/routes and 2 MiB. Imported records are disabled drafts with new IDs, slugs and keys; existing configuration remains unchanged. Restore credentials/URLs/custom webhook bodies, reassign message templates if needed, review recipients and rotate fresh route keys before enabling. This is a portable configuration file, not a credential or database backup.
+
+Channel creation and updates require a nonblank name of at most 100 Unicode characters without control characters; names are trimmed on save. Import uses the same validator. Export reports a failing legacy record by UUID and a bounded/escaped name, so an administrator can repair it without guessing or silently dropping configuration.

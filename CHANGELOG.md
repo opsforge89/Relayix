@@ -2,6 +2,10 @@
 
 ## 0.8.7 Beta — 2026-11-08
 
+- Restrict webhook body-template visibility and channel/draft management to administrators, preventing masked-key retargeting by members.
+- Validate channel names on create/update/import and identify invalid legacy records in export errors.
+- Bound Pushover/ntfy body/title fields with character/UTF-8-byte policies and Google Chat's 32,000-byte JSON budget; retain complete event history.
+
 - Add a shared Telegram-proxy worker budget across channels/queues/replicas (default 2) and 20 ms retries for claim-lock contention while preserving idle backoff.
 - Add Rust/frontend unit tests to Docker-free PR checks and keep unverified OCI candidates off GHCR.
 - Truncate oversized Telegram/Discord deliveries with a visible marker and Unicode/markup-safe bounds while preserving full history.

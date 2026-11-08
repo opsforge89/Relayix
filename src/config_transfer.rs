@@ -93,18 +93,17 @@ fn validate(bundle: &Bundle) -> Result<()> {
     let mut channels = HashSet::new();
     for channel in &bundle.channels {
         if !channels.insert(channel.key)
-            || channel.name.trim().is_empty()
-            || channel.name.len() > 100
             || !kind_valid(&channel.kind)
         {
-            return Err(anyhow!("Invalid or duplicate imported channel"));
+            return Err(anyhow!("Channel {} ({:?}): invalid kind or duplicate key", channel.key, channel.name.chars().take(80).collect::<String>()));
         }
+        valid_channel_name(&channel.name).map_err(|e| anyhow!("Channel {} ({:?}): {e}", channel.key, channel.name.chars().take(80).collect::<String>()))?;
         if !channel.config.is_object()
             || safe_config(&channel.config) != channel.config
             || serde_json::to_vec(&channel.config)?.len() > 16384
         {
             return Err(anyhow!(
-                "Imported channel config must contain only credential-free portable fields"
+                "Channel {} ({:?}): config must contain only credential-free portable fields", channel.key, channel.name.chars().take(80).collect::<String>()
             ));
         }
     }
@@ -119,7 +118,7 @@ fn validate(bundle: &Bundle) -> Result<()> {
                 .any(|id| !channels.contains(id))
         {
             return Err(anyhow!(
-                "Invalid imported route or missing channel reference"
+                "Route {} ({:?}): duplicate key, invalid priority or missing channel reference", route.key, route.name.chars().take(80).collect::<String>()
             ));
         }
         route_api::valid_route(&route_api::RouteInput {
@@ -134,7 +133,7 @@ fn validate(bundle: &Bundle) -> Result<()> {
             payload_rules: route.payload_rules.clone(),
             channel_ids: route.channel_keys.clone(),
             fallback_channel_ids: route.fallback_channel_keys.clone(),
-        })?;
+        }).map_err(|e| anyhow!("Route {} ({:?}): {e}", route.key, route.name.chars().take(80).collect::<String>()))?;
     }
     Ok(())
 }
@@ -263,6 +262,18 @@ pub async fn import(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_legacy_names_report_the_record_and_share_unicode_validation() {
+        let id = Uuid::new_v4();
+        let channel = PortableChannel { key: id, name: " ".into(), kind: "webhook".into(), config: json!({}), omitted_fields: Vec::new() };
+        let mut bundle = Bundle { schema_version: 1, channels: vec![channel], routes: Vec::new() };
+        let error = validate(&bundle).unwrap_err().to_string();
+        assert!(error.contains(&id.to_string()) && error.contains("Channel name"));
+        bundle.channels[0].name = "😀".repeat(100);
+        assert!(validate(&bundle).is_ok());
+        bundle.channels[0].name = "x".repeat(101);
+        assert!(validate(&bundle).unwrap_err().to_string().contains(&id.to_string()));
+    }
     #[test]
     fn portable_configs_omit_credentials_urls_and_custom_payloads() {
         let raw = json!({"bot_token":"private","url":"https://example.org/private-token","body_template":{"token":"private"},"proxy_secret":"private","chat_id":"42","host":"user:private@example.org"});

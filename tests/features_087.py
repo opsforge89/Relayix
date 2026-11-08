@@ -31,9 +31,10 @@ def wait(predicate):
         if value:return value
         time.sleep(.1)
     raise AssertionError('Feature regression timed out')
-def received(path):
+def raw_received(path):
     with urllib.request.urlopen('http://mock:8000/received',timeout=5) as r:
-        return [json.loads(item['body']) for item in json.load(r) if item['path']==path]
+        return [item['body'] for item in json.load(r) if item['path']==path]
+def received(path):return [json.loads(body) for body in raw_received(path)]
 
 channels=[];routes=[];members=[]
 try:
@@ -72,6 +73,19 @@ try:
     assert len(content.encode('utf-16-le'))//2<=2000 and content.endswith('[Message truncated]')
     assert sql(f"SELECT message FROM events WHERE id='{event['event_id']}'")==original
 
+    ntfy_topic='limit-ntfy087-'+suffix
+    ntfy=ok('/api/channels',{'name':'087 bounded ntfy','kind':'ntfy','config':{'url':'http://mock:8000','topic':ntfy_topic}})['id'];channels.append(ntfy)
+    ntfy_route=ok('/api/routes',{'name':'087 ntfy body','channel_ids':[ntfy]});routes.append(ntfy_route['id'])
+    ok(ntfy_route['endpoint'],{'message':original},headers={'X-Relay-Key':ntfy_route['token']})
+    ntfy_body=wait(lambda:raw_received('/'+ntfy_topic))[0]
+    assert len(ntfy_body.encode())<=4096 and ntfy_body.endswith('[Message truncated]')
+    google_path='/limit-google087-'+suffix
+    google=ok('/api/channels',{'name':'087 bounded Google Chat','kind':'google_chat','config':{'url':'http://mock:8000'+google_path}})['id'];channels.append(google)
+    google_route=ok('/api/routes',{'name':'087 Google body','channel_ids':[google]});routes.append(google_route['id'])
+    ok(google_route['endpoint'],{'message':chr(0)*9000},headers={'X-Relay-Key':google_route['token']})
+    google_raw=wait(lambda:raw_received(google_path))[0]
+    assert len(google_raw.encode())<=32000 and json.loads(google_raw)['text'].endswith('[Message truncated]')
+
     before_channels={c['id'] for c in ok('/api/channels')};before_routes={r['id'] for r in ok('/api/routes')}
     bundle=ok('/api/config/export')
     member_name='transfer-'+suffix
@@ -81,6 +95,34 @@ try:
     member_headers={'Authorization':'','Cookie':h['Set-Cookie'].split(';',1)[0]}
     assert request('/api/config/export',headers=member_headers)[0]==403
     assert request('/api/config/import',bundle,headers=member_headers)[0]==403
+    member_channels=ok('/api/channels',headers=member_headers)
+    protected=next(c for c in member_channels if c['id']==channel)
+    assert protected['config']['body_template']=='********' and hidden not in json.dumps(member_channels)
+    override={'name':'087 custom JSON','kind':'webhook','config':{'url':'http://mock:8000/credential-capture'}}
+    assert request('/api/channels/'+channel,override,method='PUT',headers=member_headers)[0]==403
+    assert request('/api/channels/'+channel,method='DELETE',headers=member_headers)[0]==403
+    assert request('/api/channels/diagnose',{'id':channel,'kind':'webhook','config':override['config']},headers=member_headers)[0]==403
+    assert request('/api/channels',{'name':'Member template','kind':'webhook','config':{'url':'http://mock:8000/blocked-template','body_template':{'text':'{{message}}'}}},headers=member_headers)[0]==403
+    # Members retain ordinary channel editing; administrators retain a secret template on masked saves.
+    ok('/api/channels/'+discord,{'name':'  087 bounded Discord  ','kind':'discord','config':{'url':'********'}},method='PUT',headers=member_headers)
+    ok('/api/channels/'+channel,{'name':'087 custom JSON','kind':'webhook','config':{'url':'********','body_template':'********'}},method='PUT')
+    assert next(c for c in ok('/api/channels') if c['id']==channel)['config']['body_template']['static']==hidden
+    for name in ['', '   ', 'x'*101, 'line'+chr(10)+'break']:
+        assert request('/api/channels',{'name':name,'kind':'webhook','config':{'url':'http://mock:8000/name-check'}})[0]==400
+    assert request('/api/channels/'+discord,{'name':'x'*101,'kind':'discord','config':{'url':'********'}},method='PUT')[0]==400
+    unicode_channel=ok('/api/channels',{'name':'😀'*100,'kind':'webhook','enabled':False,'config':{'url':'http://mock:8000/unicode-name'}})['id']
+    channels.append(unicode_channel)
+    assert next(c for c in ok('/api/config/export')['channels'] if c['key']==unicode_channel)['name']=='😀'*100
+    ok('/api/channels/'+unicode_channel,method='DELETE');channels.remove(unicode_channel)
+    # Simulate records created by old versions. Export identifies the exact bad record.
+    try:
+        for invalid in ['', 'x'*101]:
+            sql(f"UPDATE channels SET name='{invalid}' WHERE id='{discord}'")
+            code,error,_=request('/api/config/export')
+            assert code==400 and discord in error['error'] and 'Channel name' in error['error']
+    finally:
+        sql(f"UPDATE channels SET name='087 bounded Discord' WHERE id='{discord}'")
+
     encoded=json.dumps(bundle)
     assert hidden not in encoded and route['token'] not in encoded and credentials['admin_token'] not in encoded
     for c in bundle['channels']:

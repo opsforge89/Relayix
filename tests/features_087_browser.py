@@ -1,6 +1,7 @@
 """Exercise JSON body editing, route quotas and admin configuration transfer in Chromium."""
 import json
 import os
+import uuid
 from pathlib import Path
 from playwright.sync_api import sync_playwright,expect
 from runtime import credentials
@@ -15,7 +16,7 @@ with sync_playwright() as p:
     setup=p.request.new_context(base_url=BASE,extra_http_headers={'X-Relay-Client':'web'})
     def ok(r):assert r.ok,r.text();return r.json()
     def nav(name):page.locator('nav').get_by_role('button',name=name,exact=True).click()
-    channels=[];routes=[];preferences=None
+    channels=[];routes=[];members=[];preferences=None
     try:
         ok(setup.post('/api/auth/login',data={'username':'admin','password':credentials['admin_password']}))
         preferences=ok(setup.get('/api/auth/me'))['preferences']
@@ -60,10 +61,27 @@ with sync_playwright() as p:
         channels.extend(c['id'] for c in new_channels);routes.extend(r['id'] for r in new_routes)
         assert len(new_channels)==len(new_routes)==1 and not new_channels[0]['enabled'] and not new_routes[0]['enabled']
         assert new_routes[0]['channels']==[new_channels[0]['id']] and new_routes[0]['rate_limit_per_minute']==3
+        member_name='template-ui-'+uuid.uuid4().hex[:16]
+        member=ok(api.post('/api/users',data={'username':member_name,'display_name':'Template permissions UI','role':'member','password':credentials['operator_password']}))['id'];members.append(member)
+        member_page=browser.new_page(viewport={'width':1680,'height':1200},locale='en-US')
+        member_page.set_default_timeout(15000)
+        member_page.goto(BASE)
+        member_page.get_by_label('Username',exact=True).fill(member_name);member_page.get_by_label('Password',exact=True).fill(credentials['operator_password']);member_page.get_by_role('button',name='Sign in',exact=True).click()
+        expect(member_page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
+        member_page.locator('nav').get_by_role('button',name='Channels',exact=True).click()
+        restricted=member_page.locator('.channel-entry').filter(has=member_page.locator('button[title="Administrator required for channels with a body template"]')).first
+        expect(restricted.get_by_role('button',name='Edit',exact=True)).to_be_disabled()
+        member_page.get_by_role('button',name='Add Channel',exact=True).click()
+        member_editor=member_page.get_by_role('dialog',name='Add channel',exact=True)
+        member_editor.get_by_label('Integration',exact=True).select_option('webhook')
+        expect(member_editor.locator('#webhook-body-template')).to_have_count(0)
+        expect(member_editor.get_by_text('Webhook body templates are managed by administrators.',exact=True)).to_be_visible()
+        member_page.close()
         assert not errors,errors
         print('PASS: Chromium body-template validation/save, route limit editing and disabled configuration import/export',flush=True)
     finally:
         for route in routes:api.delete('/api/routes/'+route)
         for channel in channels:api.delete('/api/channels/'+channel)
+        for member in members:api.delete('/api/users/'+member)
         if preferences:setup.put('/api/auth/preferences',data=preferences)
         browser.close()

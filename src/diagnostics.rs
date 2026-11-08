@@ -228,7 +228,8 @@ pub async fn draft(
     h: HeaderMap,
     Json(mut draft): Json<Draft>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let principal = auth::authenticated(&h, &s).await?;
+    require_template_editor(&principal.role, &draft.config, None)?;
     if let Some(id) = draft.id {
         let old: Option<(Value,)> = sqlx::query_as("SELECT config FROM channels WHERE id=$1")
             .bind(id)
@@ -236,6 +237,7 @@ pub async fn draft(
             .await
             .map_err(db_error)?;
         let old = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
+        require_template_editor(&principal.role, &draft.config, Some(&old.0))?;
         restore_masked(&mut draft.config, &old.0);
     }
     let c = Channel {
