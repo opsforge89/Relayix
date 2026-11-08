@@ -4,7 +4,10 @@ COPY Cargo.toml /Cargo.toml
 COPY web/package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run lint && npm test && npm run build
+RUN npm run build
+
+FROM web-builder AS web-checks
+RUN npm run lint && npm test && touch /web-checks-passed
 
 FROM python:3.15.2-slim-trixie AS npm-licenses
 COPY scripts/collect_licenses.py /collect_licenses.py
@@ -18,16 +21,21 @@ COPY src src
 COPY migrations migrations
 COPY scripts/collect_licenses.py /collect_licenses.py
 RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
-RUN rustup component add rustfmt clippy
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings \
-    && cargo test --locked --release && cargo build --locked --release \
+    cargo build --locked --release \
     && cp target/release/relayix /app/relayix \
     && cargo metadata --locked --format-version 1 > /app/rust-metadata.json \
     && python3 /collect_licenses.py rust /app/rust-metadata.json /licenses
 
-FROM python:3.15.2-slim-trixie
+FROM rust-builder AS rust-checks
+RUN rustup component add rustfmt clippy
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings \
+    && cargo test --locked --release && touch /rust-checks-passed
+
+FROM python:3.15.2-slim-trixie AS runtime
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin relayix
 COPY transport/requirements.txt /app/transport/requirements.txt
@@ -53,3 +61,11 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).close()"
 EXPOSE 8080
 CMD ["/usr/local/bin/relayix"]
+
+# CI exercises the same runtime, with checks enforced by stage dependencies.
+FROM runtime AS verified
+COPY --from=web-checks /web-checks-passed /usr/share/doc/relayix/checks/web
+COPY --from=rust-checks /rust-checks-passed /usr/share/doc/relayix/checks/rust
+
+# Release builds consume the application stages without rerunning the check stages.
+FROM runtime AS production

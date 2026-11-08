@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6 Beta — 2026-11-08
+
+- Run the complete verification suite once in the release workflow, before building/publishing the production image. Remove automatic PR/main and standalone verification triggers.
+- Split Docker verification stages from production stages: the verification runtime enforces Rust/frontend checks, while the production build does not rerun them. API/SMTP/browser tests and security scans must pass before publication.
+- Include the proxy, quota, login and Telegram fixes listed under 0.8.5. Its tag was created, but the duplicate publication workflow was cancelled before image/release publication in favor of this version.
+
 ## 0.8.5 Beta — 2026-11-08
 
 - Fix the standalone Compose bridge subnet/gateway, trust only that gateway by default, permit explicit network/proxy overrides, and warn when the application has no trusted proxies. Existing installations must recreate the bridge without removing volumes and remove stale/empty proxy assignments to adopt the default.

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Existing numeric version tag, for example 0.8.5
+        description: Existing numeric version tag, for example 0.8.6
         required: true
         type: string
 permissions:
@@ -57,10 +57,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested image
+      - name: Build and publish production image after all tests
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: production
           pull: true
           push: true
           tags: |

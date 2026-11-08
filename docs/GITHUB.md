@@ -10,30 +10,34 @@ The local origin is connected to https://github.com/opsforge89/Relayix.git and b
 git remote -v  # origin: https://github.com/opsforge89/Relayix.git
 git add .
 git diff --cached --stat
-git commit -m "Prepare Relayix 0.8.5 Beta"
+git commit -m "Prepare Relayix 0.8.6 Beta"
 git push -u origin main
 ```
 
 Private configuration, local backups, dumps, image exports and generated outputs are ignored. Review staged files before the first commit. Relayix original source is Apache-2.0; preserve LICENSE, NOTICE and THIRD_PARTY_NOTICES.md, together with the dependency licenses generated into the runtime image, when distributing. Review the third-party inventory and run the secret checks before publication.
 
-In repository settings enable Actions and Packages. Protect `main` and require the `verify` job before merging. Enable private vulnerability reporting and secret scanning if available. Dependabot is configured for Rust, npm and Actions.
+In repository settings enable Actions and Packages. Protect `main` against force pushes/deletion. Do not require a PR `verify` status: verification runs only before release publication, and `publish` requires its successful completion. Enable private vulnerability reporting and secret scanning if available. Dependabot is configured for Rust, npm and Actions.
 
 ## Continuous integration
 
-`Verify` runs on pull requests, pushes to `main` and manual dispatch. Updates limited to `README.md` and `docs/` keep the required `verify` check but skip image builds and all application tests, running only the lightweight private-file scan. Changes to application files, release-tag verification and manual verification retain the full build/test flow. It builds the Docker image with Rust formatting, Clippy and `cargo test --locked --release`, checks the React app with ESLint and unit tests, audits Cargo dependencies, scans the runtime image for fixable HIGH/CRITICAL vulnerabilities, and runs `scripts/check.sh --skip-app-build`. Tests use an isolated PostgreSQL, local SMTP/HTTP mocks and Chromium. Test resources are cleaned up even on failure. Screenshots and failure logs are uploaded for seven days. Fork PRs run without registry publishing credentials.
+`Verify` is a reusable workflow called only by `Release Docker image`. It does not run automatically on PRs or pushes to `main`, and has no standalone manual trigger. Each release runs the full suite once, then builds/publishes the production image only when `verify` succeeds.
+
+The verification job builds the Docker `verified` target, which enforces Rust formatting, Clippy, `cargo test --locked --release`, frontend ESLint and unit tests. It audits Cargo dependencies, scans the runtime image for fixable HIGH/CRITICAL vulnerabilities, and runs `scripts/check.sh --skip-app-build` for API, queue, SMTP and Chromium tests using temporary PostgreSQL and local mocks. The verification image is needed for these integration tests and is never published. Test resources are cleaned up even on failure; screenshots and failure logs are retained for seven days.
+
+The production Docker target shares application/runtime stages with the verification image but has no dependency on the Rust/frontend check stages. After all tests pass, `publish` builds that target and pushes it, without running tests again. Local test runs are not part of the release process.
 
 ## Continuous delivery
 
-When a tested version is ready:
+When a version is ready for pre-publication testing:
 
 ```bash
-git tag v0.8.5
-git push origin v0.8.5
+git tag v0.8.6
+git push origin v0.8.6
 ```
 
-`Release Docker image` runs the complete CI again, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.5` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
+`Release Docker image` runs the complete CI once before the production build, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.6` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
 
-`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.5`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
+`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.6`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
 
 Container package visibility is controlled in GitHub Packages. For anonymous pulls set the package public. For private pulls authenticate on the deployment host with a token allowed to read that package; do not commit the credential.
 
@@ -71,7 +75,7 @@ The workflow renders a candidate JSON from Secrets/Variables in `RUNNER_TEMP`, t
 
 For manual operation, use `scripts/compose.sh`; it loads the private JSON into the Docker process environment and disables dotenv discovery. There is no production `.env` in the repository. Deployment credentials must not be put into repository Variables, workflow YAML, image build arguments, test fixtures or CI artifacts.
 
-After connection/publication, run CI once in GitHub to validate account/runner settings. See [publication checks](PUBLICATION.md). Source preparation and local tests do not publish files or configure remote Secrets automatically.
+The first release workflow validates the account/runner settings before publishing. See [publication checks](PUBLICATION.md). Source preparation and local tests do not publish files or configure remote Secrets automatically.
 
 References: [GitHub Actions secrets](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions), [GitHub container publishing](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
 
