@@ -12,11 +12,16 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+sensitive_values = set()
 
 def run(*args, **kwargs):
     result = subprocess.run(args, capture_output=True, text=True, **kwargs)
     if result.returncode:
-        raise RuntimeError('Command failed: ' + args[0] + ' (credential values omitted)')
+        # Never print command arguments or stdout: Compose config contains credentials.
+        detail = result.stderr
+        for value in sorted(sensitive_values, key=len, reverse=True):
+            detail = detail.replace(value, '[REDACTED]')
+        raise RuntimeError('Command failed: ' + args[0] + ' (exit ' + str(result.returncode) + '): ' + detail[-3000:])
     return result.stdout
 
 for mode in (sys.argv[1:] or ('local', 'external', 'external-tls')):
@@ -25,6 +30,8 @@ for mode in (sys.argv[1:] or ('local', 'external', 'external-tls')):
     database_container = project + '-external-db'
     password = secrets.token_hex(24) + '@:#%/$'
     admin_password = 'Ab7!' + secrets.token_hex(24)
+    # Include the random prefixes to redact quoted/escaped variants of each value.
+    sensitive_values.update((password, password[:48], admin_password, admin_password[4:]))
     with tempfile.TemporaryDirectory(prefix=project) as directory:
         path = Path(directory)
         shutil.copyfile(ROOT / 'compose.yaml', path / 'compose.yaml')

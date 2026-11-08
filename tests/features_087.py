@@ -82,7 +82,8 @@ try:
     google_path='/limit-google087-'+suffix
     google=ok('/api/channels',{'name':'087 bounded Google Chat','kind':'google_chat','config':{'url':'http://mock:8000'+google_path}})['id'];channels.append(google)
     google_route=ok('/api/routes',{'name':'087 Google body','channel_ids':[google]});routes.append(google_route['id'])
-    ok(google_route['endpoint'],{'message':chr(0)*9000},headers={'X-Relay-Key':google_route['token']})
+    # PostgreSQL text rejects NUL; SOH has the same six-byte JSON escaping cost.
+    ok(google_route['endpoint'],{'message':chr(1)*9000},headers={'X-Relay-Key':google_route['token']})
     google_raw=wait(lambda:raw_received(google_path))[0]
     assert len(google_raw.encode())<=32000 and json.loads(google_raw)['text'].endswith('[Message truncated]')
 
