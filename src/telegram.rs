@@ -196,7 +196,18 @@ async fn transport_inner(
         return Ok(data);
     }
     let message=match data["code"].as_str(){Some("destination")=>"Telegram destination could not be resolved; check the Chat ID or @username and bot membership/permissions",Some("credentials")=>"Telegram rejected the bot token or application credentials",Some("flood")=>"Telegram rate limit; delivery will retry",Some("proxy")=>"Telegram proxy connection failed; check address, secret and network",_=>"Telegram MTProto/WEB delivery failed; check bot permissions and destination"};
-    Err(anyhow!(message))
+    match data["code"].as_str() {
+        Some("credentials") => Err(retry_policy::transport("authentication", true, None)),
+        Some("destination") => Err(retry_policy::transport("destination", true, None)),
+        Some("flood") => Err(retry_policy::transport(
+            "rate_limit",
+            false,
+            data["retry_after"]
+                .as_u64()
+                .map(|v| v.min(i32::MAX as u64) as i32),
+        )),
+        _ => Err(anyhow!(message)),
+    }
 }
 
 pub async fn send(cfg: &Value, text: &str, delivery_id: Uuid, html: bool) -> Result<()> {

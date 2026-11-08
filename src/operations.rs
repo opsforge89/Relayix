@@ -81,23 +81,43 @@ pub async fn event_details(
     value["has_title"] = json!(has_title);
     Ok(Json(value))
 }
+#[derive(FromRow)]
+struct AttemptSummary {
+    attempts: i32,
+    status: String,
+    is_fallback: bool,
+    error: Option<String>,
+    next_attempt_at: DateTime<Utc>,
+    channel_id: Uuid,
+    error_category: Option<String>,
+}
 pub async fn attempts(
     State(s): State<AppState>,
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let delivery: Option<(i32, String, bool, Option<String>)> =
-        sqlx::query_as("SELECT attempts,status,is_fallback,error FROM deliveries WHERE id=$1")
+    let delivery: Option<AttemptSummary> =
+        sqlx::query_as("SELECT attempts,status,is_fallback,error,next_attempt_at,channel_id,error_category FROM deliveries WHERE id=$1")
             .bind(id)
             .fetch_optional(&s.db)
             .await
             .map_err(db_error)?;
-    let (total, status, is_fallback, error) =
-        delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
-    let items:Vec<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('number',number,'started_at',started_at,'finished_at',finished_at,'status',status,'error',error) FROM delivery_attempts WHERE delivery_id=$1 ORDER BY number DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db_error)?;
+    let AttemptSummary {
+        attempts: total,
+        status,
+        is_fallback,
+        error,
+        next_attempt_at,
+        channel_id,
+        error_category,
+    } = delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
+    let items:Vec<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('number',number,'started_at',started_at,'finished_at',finished_at,'status',status,'error',error,'error_category',error_category) FROM delivery_attempts WHERE delivery_id=$1 ORDER BY number DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db_error)?;
+    let health = channel_health::status(&s.db, channel_id)
+        .await
+        .map_err(db_error)?;
     Ok(Json(
-        json!({"delivery_id":id,"attempts":total,"status":status,"is_fallback":is_fallback,"items":items.into_iter().map(|r|r.0).collect::<Vec<_>>(),"history_limit":100,"can_retry":status=="failed"||(status=="queued"&&error.is_some())}),
+        json!({"next_attempt_at":if status=="queued" {Some(next_attempt_at)} else {None},"error":error,"error_category":error_category,"channel_health":health,"delivery_id":id,"attempts":total,"status":status,"is_fallback":is_fallback,"items":items.into_iter().map(|r|r.0).collect::<Vec<_>>(),"history_limit":100,"can_retry":status=="failed"||(status=="queued"&&error.is_some())}),
     ))
 }
 
@@ -132,24 +152,36 @@ async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value
         None => lease::Claim::Contended,
     })
 }
-async fn finish(s: &AppState, id: Uuid, number: i32, result: Result<()>) -> Result<()> {
+async fn finish(
+    s: &AppState,
+    id: Uuid,
+    channel: Uuid,
+    number: i32,
+    result: Result<()>,
+) -> Result<()> {
     let mut tx = s.db.begin().await?;
+    channel_health::lock(&mut tx, channel).await?;
     let row:Option<(Uuid,bool,i32)>=sqlx::query_as("SELECT event_id,is_fallback,cycle_attempts FROM deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE").bind(id).bind(number).fetch_optional(&mut *tx).await?;
     let Some((event_id, is_fallback, cycle_attempts)) = row else {
         return Ok(());
     };
+    let plan = result
+        .as_ref()
+        .err()
+        .map(|e| retry_policy::plan(e, cycle_attempts, s.retry_seconds));
+    channel_health::record(&mut tx, channel, &result, cycle_attempts, s.retry_seconds).await?;
     let error = result
         .err()
         .map(|e| e.to_string().chars().take(512).collect::<String>());
     let status = if error.is_none() {
         "sent"
-    } else if cycle_attempts >= 5 {
+    } else if cycle_attempts >= 5 || plan.as_ref().is_some_and(|p| p.permanent) {
         "failed"
     } else {
         "queued"
     };
-    sqlx::query("UPDATE delivery_attempts SET status=$3,error=$4,finished_at=NOW() WHERE delivery_id=$1 AND number=$2").bind(id).bind(number).bind(if error.is_none(){"sent"}else{"failed"}).bind(&error).execute(&mut *tx).await?;
-    sqlx::query("UPDATE deliveries SET status=$2,error=$3,locked_at=NULL,sent_at=CASE WHEN $2='sent' THEN NOW() ELSE NULL END,last_error_at=CASE WHEN $3::text IS NULL THEN NULL ELSE NOW() END,next_attempt_at=NOW()+(POWER(2,LEAST(cycle_attempts,8))::int * $4::int * INTERVAL '1 second') WHERE id=$1").bind(id).bind(status).bind(error).bind(s.retry_seconds).execute(&mut *tx).await?;
+    sqlx::query("UPDATE delivery_attempts SET status=$3,error=$4,error_category=$5,finished_at=NOW() WHERE delivery_id=$1 AND number=$2").bind(id).bind(number).bind(if error.is_none(){"sent"}else{"failed"}).bind(&error).bind(plan.as_ref().map(|p| p.category)).execute(&mut *tx).await?;
+    sqlx::query("UPDATE deliveries SET status=$2,error=$3,locked_at=NULL,sent_at=CASE WHEN $2='sent' THEN NOW() ELSE NULL END,last_error_at=CASE WHEN $3::text IS NULL THEN NULL ELSE NOW() END,next_attempt_at=NOW()+$4::int*INTERVAL '1 second',error_category=$5 WHERE id=$1").bind(id).bind(status).bind(error).bind(plan.as_ref().map(|p| p.delay).unwrap_or(0)).bind(plan.as_ref().map(|p| p.category)).execute(&mut *tx).await?;
     if status == "failed" && !is_fallback {
         let targets:Vec<(Uuid,)>=sqlx::query_as("SELECT f.channel_id FROM event_fallback_channels f JOIN channels c ON c.id=f.channel_id WHERE f.event_id=$1 AND c.enabled ORDER BY f.channel_id").bind(event_id).fetch_all(&mut *tx).await?;
         for (cid,) in targets {
@@ -188,8 +220,8 @@ async fn deliver_owned(
                 )
                 .await
             }
-            Ok(Some(_)) => Err(anyhow!("Channel disabled")),
-            Ok(None) => Err(anyhow!("Channel removed")),
+            Ok(Some(_)) => Err(retry_policy::permanent("Channel disabled")),
+            Ok(None) => Err(retry_policy::permanent("Channel removed")),
             Err(_) => Err(anyhow!("Channel lookup failed")),
         }
     };
@@ -204,7 +236,7 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
         match claim(&s).await {
             Ok(lease::Claim::Ready((id, priority, cid, number, payload))) => {
                 let result = deliver_owned(&s, id, cid, number, priority, &payload).await;
-                if let Err(e) = finish(&s, id, number, result).await {
+                if let Err(e) = finish(&s, id, cid, number, result).await {
                     tracing::error!(%e,%id,"worker result update failed");
                     runtime::pause(&mut stop, Duration::from_secs(3)).await;
                 }

@@ -47,6 +47,7 @@ def verify(api, anonymous):
         assert api.request(route['endpoint'],{},'POST',{**headers,'Idempotency-Key':''})[0]==400
         # Advance only this test's retry schedule, while still executing every actual attempt.
         def finished():
+            subprocess.run(['psql','--no-psqlrc','-v','ON_ERROR_STOP=1','-c',"UPDATE channel_health SET paused_until=NOW()-INTERVAL '1 second' WHERE channel_id IN (SELECT channel_id FROM deliveries WHERE event_id='"+event_id+"') AND paused_until IS NOT NULL"],check=True,stdout=subprocess.DEVNULL)
             subprocess.run(['psql','--no-psqlrc','-v','ON_ERROR_STOP=1','-c',"UPDATE deliveries SET next_attempt_at=NOW() WHERE event_id='"+event_id+"' AND status='queued'"],check=True,stdout=subprocess.DEVNULL)
             data=rows()
             return data if len(data)==4 and all(d['status'] in ('sent','failed') for d in data) else False

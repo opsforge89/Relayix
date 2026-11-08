@@ -1,9 +1,11 @@
 mod channel_api;
 mod channel_config;
+mod channel_health;
 mod client_ip;
 mod config_transfer;
 mod delivery_api;
 mod lease;
+mod retry_policy;
 mod route_api;
 use channel_api::*;
 use delivery_api::*;
@@ -280,6 +282,7 @@ async fn main() -> Result<()> {
         )
         .route("/channels", get(channels).post(create_channel))
         .route("/channels/diagnose", post(diagnostics::draft))
+        .route("/channels/preview", post(message::preview_channel))
         .route("/stats", get(stats))
         .route(
             "/channels/{id}",

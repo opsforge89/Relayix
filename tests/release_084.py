@@ -9,7 +9,7 @@ import uuid
 
 ROOT=Path(__file__).resolve().parents[1]
 project='relayix-test-084-'+uuid.uuid4().hex[:10]
-image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.7')
+image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.8')
 
 def run(args,**kwargs):
     result=subprocess.run(args,capture_output=True,text=True,timeout=100,**kwargs)

@@ -66,12 +66,7 @@ pub(crate) fn api_url(cfg: &Value, parts: &[&str]) -> Result<url::Url> {
     Ok(url)
 }
 async fn response_json(response: reqwest::Response) -> Result<Value> {
-    if !response.status().is_success() {
-        return Err(anyhow!(
-            "Mattermost API returned {}; check token permissions, recipient and channel membership",
-            response.status()
-        ));
-    }
+    let response = retry_policy::response(response).await?;
     response
         .json()
         .await

@@ -133,7 +133,7 @@ with sync_playwright() as p:
         preview = json.loads(tester.get_by_label('Test webhook JSON', exact=True).text_content())
         assert 'priority' not in preview and 'tags' not in preview and not submitted
         with page.expect_response(lambda r: r.url.endswith('/preview')) as previewed:
-            tester.get_by_role('button', name='Preview routing', exact=True).click()
+            tester.get_by_role('button', name='Preview routing and messages', exact=True).click()
         assert previewed.value.json()['would_queue'] == 2
         expect(tester.get_by_text('2 would queue · 0 sent', exact=True)).to_be_visible()
         assert not submitted

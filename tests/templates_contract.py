@@ -54,6 +54,7 @@ def verify(api, anonymous):
         assert details(event)['message']==preview['message']
         # Execute real failure attempts; accelerate this event's retry scheduling only.
         def finished():
+            subprocess.run(['psql','--no-psqlrc','-v','ON_ERROR_STOP=1','-c',"UPDATE channel_health SET paused_until=NOW()-INTERVAL '1 second' WHERE channel_id='"+primary+"' AND paused_until IS NOT NULL"],check=True,stdout=subprocess.DEVNULL)
             subprocess.run(['psql','--no-psqlrc','-v','ON_ERROR_STOP=1','-c',"UPDATE deliveries SET next_attempt_at=NOW() WHERE event_id='"+event['event_id']+"' AND status='queued'"],check=True,stdout=subprocess.DEVNULL)
             rows=details(event)['recipients']
             return rows if len(rows)==2 and all(r['status'] in ('sent','failed') for r in rows) else None

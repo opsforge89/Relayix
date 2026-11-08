@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.8 Beta — 2026-11-08
+
+- Preview per-channel outgoing messages in channel forms and route tests, including formatting, actual size budgets, truncation markers and fallback recipients. Previews send no network requests or events; custom webhook bodies remain administrator-only.
+- Honor HTTP Retry-After seconds/dates, Telegram flood delays and Matrix retry_after_ms. Stop permanent HTTP/SMTP/Telegram errors immediately; retry temporary failures with exponential backoff and expose failure categories and the next attempt time.
+- Pause a channel after three consecutive identical failures for at least 60 seconds, or immediately for a provider retry delay. Share cooldowns and a single recovery probe across notification/alert queues and replicas; retain backlog and resume after recovery.
+- Require explicit secrets after destination, proxy or channel-type changes in channel updates and draft diagnostics, preventing masked-credential retargeting for every integration.
+- Bound Rocket.Chat delivery text to 5,000 UTF-16 units, including the title and truncation marker, while preserving complete history.
+- Show incoming and integration-specific limits in channel forms and document all 13 integrations in a capabilities and limits table.
+
 ## 0.8.7 Beta — 2026-11-08
 
 - Restrict webhook body-template visibility and channel/draft management to administrators, preventing masked-key retargeting by members.

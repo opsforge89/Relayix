@@ -121,8 +121,21 @@ pub async fn send_smtp(cfg: &Value, title: &str, body: &str) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(30), transport.send(message))
         .await
         .map_err(|_| anyhow!("SMTP delivery timed out"))?
-        .map_err(|_| {
-            anyhow!("SMTP delivery failed; check server, TLS mode, credentials and recipient")
+        .map_err(|error| {
+            let authentication = error
+                .status()
+                .is_some_and(|code| matches!(code.to_string().as_str(), "534" | "535"));
+            crate::retry_policy::transport(
+                if authentication {
+                    "authentication"
+                } else if error.is_permanent() {
+                    "destination"
+                } else {
+                    "temporary"
+                },
+                error.is_permanent(),
+                None,
+            )
         })?;
     Ok(())
 }
@@ -207,15 +220,12 @@ pub async fn send_matrix(
         .await
         .map_err(|e| anyhow!(e.without_url()))?;
     if encryption.status().is_success() {
-        return Err(anyhow!(
-            "Encrypted Matrix rooms are not supported; use a room with encryption disabled"
+        return Err(crate::retry_policy::permanent(
+            "Encrypted Matrix rooms are not supported; use a room with encryption disabled",
         ));
     }
     if encryption.status() != reqwest::StatusCode::NOT_FOUND {
-        return Err(anyhow!(
-            "Matrix room check returned {}",
-            encryption.status()
-        ));
+        crate::retry_policy::response(encryption).await?;
     }
     let response = client
         .put(matrix_url(
@@ -227,8 +237,6 @@ pub async fn send_matrix(
         .send()
         .await
         .map_err(|e| anyhow!(e.without_url()))?;
-    if !response.status().is_success() {
-        return Err(anyhow!("Matrix server returned {}", response.status()));
-    }
+    crate::retry_policy::response(response).await?;
     Ok(())
 }

@@ -159,16 +159,16 @@ fn secrets_survive_masked_edits_and_can_be_replaced_or_cleared() {
                 assert_eq!(masked[field], "********");
             }
         }
-        restore_masked(&mut masked, &old);
+        restore_masked(&mut masked, &old, "smtp", "smtp").unwrap();
         assert_eq!(masked, old);
     }
     let replacement = key();
     let mut edited = smtp();
     edited["password"] = json!(replacement);
-    restore_masked(&mut edited, &smtp());
+    restore_masked(&mut edited, &smtp(), "smtp", "smtp").unwrap();
     assert_eq!(edited["password"], replacement);
     edited["password"] = json!("");
-    restore_masked(&mut edited, &smtp());
+    restore_masked(&mut edited, &smtp(), "smtp", "smtp").unwrap();
     assert_eq!(edited["password"], "");
 }
 

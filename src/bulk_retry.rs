@@ -108,7 +108,7 @@ pub async fn execute(
             "Retry preview expired; preview the current failures again",
         ));
     }
-    let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=NOW(),locked_at=NULL,error=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=ANY($1) AND status='failed'").bind(&ids).execute(&mut *tx).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=NOW(),locked_at=NULL,error=NULL,error_category=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=ANY($1) AND status='failed'").bind(&ids).execute(&mut *tx).await.map_err(db_error)?;
     let queued = result.rows_affected() as i32;
     sqlx::query("UPDATE delivery_retry_batches SET queued=$2 WHERE id=$1")
         .bind(id)

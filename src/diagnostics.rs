@@ -231,14 +231,16 @@ pub async fn draft(
     let principal = auth::authenticated(&h, &s).await?;
     require_template_editor(&principal.role, &draft.config, None)?;
     if let Some(id) = draft.id {
-        let old: Option<(Value,)> = sqlx::query_as("SELECT config FROM channels WHERE id=$1")
-            .bind(id)
-            .fetch_optional(&s.db)
-            .await
-            .map_err(db_error)?;
+        let old: Option<(Value, String)> =
+            sqlx::query_as("SELECT config,kind FROM channels WHERE id=$1")
+                .bind(id)
+                .fetch_optional(&s.db)
+                .await
+                .map_err(db_error)?;
         let old = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
         require_template_editor(&principal.role, &draft.config, Some(&old.0))?;
-        restore_masked(&mut draft.config, &old.0);
+        restore_masked(&mut draft.config, &old.0, &draft.kind, &old.1)
+            .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     }
     let c = Channel {
         id: draft.id.unwrap_or_else(Uuid::new_v4),

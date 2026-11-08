@@ -10,17 +10,24 @@ received = []
 lock = threading.Lock()
 
 
+recovered=set()
+
+
 class HTTP(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    def reply(self, status, data):
+    def reply(self, status, data, headers=None):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
+        for key,value in (headers or {}).items():self.send_header(key,value)
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
     def do_GET(self):
+        if self.path.startswith('/control088/'):
+            with lock:recovered.add(self.path.rsplit('/',1)[-1])
+            return self.reply(200, {'ok':True})
         if self.path.startswith('/api/v4/'):
             with lock:
                 received.append({'path': self.path, 'method': 'GET', 'authorization': self.headers.get('Authorization'), 'body': ''})
@@ -55,6 +62,15 @@ class HTTP(BaseHTTPRequestHandler):
         with lock:
             received.append({'path': self.path, 'method': self.command, 'body': body,
                              'authorization': self.headers.get('Authorization'), 'test_proxy': self.headers.get('X-Relayix-Test-Proxy')})
+        if self.path.startswith('/resilience088/'):
+            case=self.path.rsplit('/',1)[-1]
+            if case=='rate':return self.reply(429,{'parameters':{'retry_after':120}}, {'Retry-After':'20'})
+            if case=='auth':return self.reply(401,{'error':'credential echo must never enter delivery history'})
+            if case=='flaky':
+                identity=self.path.split('/')[2]
+                with lock:healthy=identity in recovered
+                if not healthy:return self.reply(503,{'error':'temporary failure'})
+                time.sleep(2)
         if self.path.startswith('/limit-ntfy087-') and len(body.encode())>4096:
             return self.reply(400, {'error':'body exceeds provider byte limit'})
         if self.path.startswith('/limit-google087-') and len(body.encode())>32000:
