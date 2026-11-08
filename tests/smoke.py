@@ -230,7 +230,11 @@ def main():
     wait_for(lambda: any(a['policy_name'] == 'Alert failure isolation' for a in admin.ok('/api/alert-deliveries')), 'Alert failure not queued')
     time.sleep(6)
     assert len([a for a in admin.ok('/api/alert-deliveries') if a['policy_name'] == 'Alert failure isolation']) == 1
-    wait_for(lambda: api.ok('/api/stats')['failed'] == 3, 'Failed delivery metrics did not update', 60)
+    # Exercise the full attempt budget without waiting through this test channel's cooldowns.
+    def complete_failures():
+        subprocess.run(['psql','--no-psqlrc','-v','ON_ERROR_STOP=1','-c',"UPDATE channel_health SET paused_until=NOW()-INTERVAL '1 second' WHERE channel_id='"+bad+"' AND paused_until IS NOT NULL"],check=True,stdout=subprocess.DEVNULL)
+        return api.ok('/api/stats')['failed'] == 3
+    wait_for(complete_failures, 'Failed delivery metrics did not update', 90)
     metrics = api.ok('/api/stats')
     assert metrics['failed_30_days'] == 3
     failed = api.ok('/api/deliveries?status=failed')

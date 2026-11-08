@@ -174,7 +174,7 @@ async fn enqueue(
     endpoint: Endpoint,
     payload: Value,
     test: bool,
-    preview: bool,
+    preview_role: Option<&str>,
     idempotency: Option<String>,
 ) -> ApiResult<Value> {
     let mut event = parse_event(&payload).map_err(|message| {
@@ -267,7 +267,7 @@ async fn enqueue(
     if let Some(result) = &template_result {
         routing["template"] = result.clone();
     }
-    if preview {
+    if let Some(role) = preview_role {
         let would_queue = routing["recipients"]
             .as_array()
             .unwrap()
@@ -284,8 +284,15 @@ async fn enqueue(
         if would_queue > 0 {
             routing["reason"] = json!("would_queue");
         }
+        let channels: Vec<Channel> = sqlx::query_as("SELECT c.* FROM channels c WHERE EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id) ORDER BY LOWER(c.name),c.id")
+            .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+        let presentations = channels.into_iter().map(|c| {
+            let presentation = message::preview(&c.kind, &c.config, &event.title, &event.message, event.priority, role=="admin")
+                .unwrap_or_else(|_| json!({"error":"Unable to render this channel; check its template settings"}));
+            json!({"id":c.id,"name":c.name,"kind":c.kind,"enabled":c.enabled,"is_fallback":fallback.iter().any(|r|r.0==c.id),"presentation":presentation})
+        }).collect::<Vec<_>>();
         return Ok(Json(
-            json!({"preview":true,"queued":0,"would_queue":would_queue,"routing":routing,"rendered":{"title":event.title,"message":event.message}}),
+            json!({"preview":true,"queued":0,"would_queue":would_queue,"routing":routing,"channel_previews":presentations,"rendered":{"title":event.title,"message":event.message}}),
         ));
     }
     if !endpoint.enabled {
@@ -408,7 +415,7 @@ async fn ingest_inner(
             Some(hash(value))
         }
     };
-    enqueue(&s, endpoint, payload, false, false, idempotency).await
+    enqueue(&s, endpoint, payload, false, None, idempotency).await
 }
 
 pub async fn test_route(
@@ -422,7 +429,7 @@ pub async fn test_route(
         "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Route not found"))?;
-    enqueue(&s, endpoint, payload, true, false, None).await
+    enqueue(&s, endpoint, payload, true, None, None).await
 }
 
 pub async fn preview_route(
@@ -431,10 +438,10 @@ pub async fn preview_route(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&headers, &s).await?;
+    let principal = auth::authenticated(&headers, &s).await?;
     let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(||err(StatusCode::NOT_FOUND,"Route not found"))?;
-    enqueue(&s, endpoint, payload, true, true, None).await
+    enqueue(&s, endpoint, payload, true, Some(&principal.role), None).await
 }
 
 #[cfg(test)]

@@ -101,7 +101,7 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
     }
     Ok(())
 }
-pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<Channel>> {
+pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut result =
         sqlx::query_as::<_, Channel>("SELECT * FROM channels ORDER BY created_at DESC")
@@ -111,7 +111,15 @@ pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResu
     for c in &mut result {
         mask_for_role(&mut c.config, &principal.role);
     }
-    Ok(Json(result))
+    let health: Vec<(Uuid, Value)> = sqlx::query_as("SELECT channel_id,jsonb_build_object('consecutive_failures',consecutive_failures,'last_error',last_error,'paused_until',paused_until,'state',CASE WHEN paused_until>NOW() THEN 'paused' WHEN paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channel_health")
+        .fetch_all(&s.db).await.map_err(db_error)?;
+    let health = health.into_iter().collect::<std::collections::HashMap<_,_>>();
+    Ok(Json(json!(result.into_iter().map(|c| {
+        let state = health.get(&c.id).cloned().unwrap_or_else(||json!({"state":"healthy","consecutive_failures":0}));
+        let mut c = json!(c);
+        c["health"] = state;
+        c
+    }).collect::<Vec<_>>())))
 }
 pub(crate) fn mask(config: &mut Value) {
     for &key in providers::SECRET_FIELDS {
@@ -120,7 +128,41 @@ pub(crate) fn mask(config: &mut Value) {
         }
     }
 }
-pub(crate) fn restore_masked(config: &mut Value, old: &Value) {
+pub(crate) fn restore_masked(
+    config: &mut Value,
+    old: &Value,
+    kind: &str,
+    old_kind: &str,
+) -> Result<()> {
+    // Compare before restoration; a masked destination means "keep the stored value".
+    let destination_changed = kind != old_kind
+        || config
+            .as_object()
+            .into_iter()
+            .chain(old.as_object())
+            .flat_map(|fields| fields.keys())
+            .filter(|key| {
+                matches!(key.as_str(), "url" | "host" | "port" | "tls" | "webproxy_address")
+                    || key.starts_with("proxy_")
+            })
+            .any(|key| {
+                let value = config.get(key);
+                let stored = old.get(key);
+                let unchanged_mask = providers::SECRET_FIELDS.contains(&key.as_str())
+                    && value.and_then(Value::as_str) == Some("********")
+                    && stored.is_some();
+                !unchanged_mask && value != stored
+            });
+    let has_masked = providers::SECRET_FIELDS
+        .iter()
+        .copied()
+        .chain(std::iter::once("body_template"))
+        .any(|key| config.get(key).and_then(Value::as_str) == Some("********"));
+    if destination_changed && has_masked {
+        return Err(anyhow!(
+            "Re-enter all masked secrets when changing the channel type, destination or proxy settings"
+        ));
+    }
     for key in providers::SECRET_FIELDS
         .iter()
         .copied()
@@ -132,6 +174,7 @@ pub(crate) fn restore_masked(config: &mut Value, old: &Value) {
             }
         }
     }
+    Ok(())
 }
 pub(crate) async fn create_channel(
     State(s): State<AppState>,
@@ -167,17 +210,16 @@ pub(crate) async fn update_channel(
     let principal = auth::authenticated(&h, &s).await?;
     valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let old: Option<(Value,)> =
-        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+    let old: Option<(Value, String)> =
+        sqlx::query_as("SELECT config,kind FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    let old = old
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?
-        .0;
+    let (old, old_kind) = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
     require_template_editor(&principal.role, &input.config, Some(&old))?;
-    restore_masked(&mut input.config, &old);
+    restore_masked(&mut input.config, &old, &input.kind, &old_kind)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     valid_config(&input.kind, &input.config, s.allow_http)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     network::validate(&input.config)
@@ -278,7 +320,8 @@ pub(crate) async fn send(
     delivery_id: Uuid,
 ) -> Result<()> {
     if c.kind == "telegram" && matches!(proxy::mode(&c.config), "mtproto" | "webproxy") {
-        valid_config(&c.kind, &c.config, allow_http)?;
+        valid_config(&c.kind, &c.config, allow_http)
+            .map_err(|_| retry_policy::permanent("Invalid channel configuration; update channel settings"))?;
         let rendered = message::render(&c.kind, &c.config, title, message);
         // Telegram owns its deadline: capacity waits must not consume a transport attempt.
         return telegram::send(&c.config, &rendered.text, delivery_id, rendered.html).await;
@@ -301,7 +344,8 @@ async fn send_inner(
     delivery_id: Uuid,
 ) -> Result<()> {
     let cfg = &c.config;
-    valid_config(&c.kind, cfg, allow_http)?;
+    valid_config(&c.kind, cfg, allow_http)
+        .map_err(|_| retry_policy::permanent("Invalid channel configuration; update channel settings"))?;
     network::validate(cfg).await?;
     let rendered = message::render(&c.kind, cfg, title, message);
     let text = rendered.text;
@@ -372,10 +416,7 @@ async fn send_inner(
         }
     };
     let response = request.send().await.map_err(|e| anyhow!(e.without_url()))?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow!("Remote server returned {status}"));
-    }
+    retry_policy::response(response).await?;
     Ok(())
 }
 
@@ -401,11 +442,96 @@ mod access_tests {
         .is_err());
         assert!(require_template_editor("member", &stored, None).is_err());
         assert!(require_template_editor("admin", &member, Some(&stored)).is_ok());
-        restore_masked(&mut member, &stored);
+        restore_masked(&mut member, &stored, "webhook", "webhook").unwrap();
         assert_eq!(member, stored);
         assert!(
             require_template_editor("member", &json!({"url":"https://example.org"}), None).is_ok()
         );
+    }
+    #[test]
+    fn retargeting_requires_secrets_before_any_restoration() {
+        for (kind, stored, field, replacement) in [
+            (
+                "gotify",
+                json!({"url":"https://gotify.example.org", "token":"private"}),
+                "url",
+                json!("https://other.example.org"),
+            ),
+            (
+                "matrix",
+                json!({"url":"https://matrix.example.org", "access_token":"private"}),
+                "url",
+                json!("https://other.example.org"),
+            ),
+            (
+                "smtp",
+                json!({"host":"smtp.example.org", "password":"private"}),
+                "host",
+                json!("other.example.org"),
+            ),
+        ] {
+            let mut edited = stored.clone();
+            mask(&mut edited);
+            edited[field] = replacement;
+            let before = edited.clone();
+            assert!(restore_masked(&mut edited, &stored, kind, kind).is_err());
+            assert_eq!(edited, before);
+        }
+        let stored = json!({
+            "url":"https://gotify.example.org", "token":"private",
+            "host":"smtp.example.org", "port":587, "tls":"starttls",
+            "proxy_type":"http", "proxy_host":"proxy.example.org", "proxy_port":3128,
+            "proxy_username":"user", "proxy_password":"password", "proxy_secret":"secret"
+        });
+        for (field, value) in [
+            ("port", json!(465)),
+            ("tls", json!("none")),
+            ("proxy_type", json!("none")),
+            ("proxy_host", json!("other.example.org")),
+            ("proxy_port", json!(8080)),
+            ("proxy_username", json!("other")),
+            ("proxy_password", json!("other")),
+            ("proxy_secret", json!("other")),
+            ("proxy_future_setting", json!("other")),
+            ("webproxy_address", json!("other.example.org")),
+        ] {
+            let mut edited = stored.clone();
+            mask(&mut edited);
+            edited[field] = value;
+            assert!(restore_masked(&mut edited, &stored, "gotify", "gotify").is_err());
+        }
+        for field in ["host", "port", "proxy_type", "proxy_host", "proxy_port"] {
+            let mut edited = stored.clone();
+            mask(&mut edited);
+            edited.as_object_mut().unwrap().remove(field);
+            assert!(restore_masked(&mut edited, &stored, "gotify", "gotify").is_err());
+        }
+        let mut edited = stored.clone();
+        mask(&mut edited);
+        assert!(restore_masked(&mut edited, &stored, "webhook", "gotify").is_err());
+    }
+    #[test]
+    fn unchanged_destinations_preserve_masks_and_explicit_secrets_allow_retargeting() {
+        let stored = json!({
+            "url":"https://gotify.example.org", "token":"private",
+            "proxy_type":"http", "proxy_host":"proxy.example.org", "proxy_port":3128,
+            "proxy_username":"user", "proxy_password":"password"
+        });
+        let mut edited = stored.clone();
+        mask(&mut edited);
+        edited["priority"] = json!(4);
+        restore_masked(&mut edited, &stored, "gotify", "gotify").unwrap();
+        assert_eq!(edited["token"], stored["token"]);
+        assert_eq!(edited["url"], stored["url"]);
+        assert_eq!(edited["proxy_password"], stored["proxy_password"]);
+        assert_eq!(edited["priority"], 4);
+
+        let mut explicit = stored.clone();
+        explicit["url"] = json!("https://other.example.org");
+        explicit["token"] = json!("replacement");
+        restore_masked(&mut explicit, &stored, "gotify", "gotify").unwrap();
+        assert_eq!(explicit["token"], "replacement");
+        assert_eq!(explicit["url"], "https://other.example.org");
     }
     #[test]
     fn channel_names_are_validated_as_unicode_on_all_write_paths() {

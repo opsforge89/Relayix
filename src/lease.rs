@@ -35,9 +35,10 @@ fn candidate(
         Queue::Alert => "alert_deliveries",
     };
     let mut query = sqlx::QueryBuilder::new("SELECT c.id,(");
-    query.push(PROXIED).push(") FROM channels c JOIN LATERAL (SELECT MIN(d.created_at) AS oldest FROM ")
+    query.push(PROXIED).push(") FROM channels c LEFT JOIN channel_health h ON h.channel_id=c.id JOIN LATERAL (SELECT MIN(d.created_at) AS oldest FROM ")
         .push(table)
-        .push(" d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE ")
+        .push(" d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE (h.paused_until IS NULL OR (h.paused_until<=NOW() AND (")
+        .push(ACTIVE).push(")=0)) AND ")
         .push(ACTIVE).push(" < ").push_bind(limit)
         .push(" AND (NOT (").push(PROXIED).push(") OR (").push(PROXY_ACTIVE).push(") < ").push_bind(proxy_limit).push(") ORDER BY ready.oldest,c.id");
     if lock {
@@ -89,6 +90,8 @@ pub async fn claim_channel(
             .push(") < ")
             .push_bind(proxy_limit);
     }
+    capacity.push(" AND NOT EXISTS(SELECT 1 FROM channel_health h WHERE h.channel_id=c.id AND (h.paused_until>NOW() OR (h.paused_until IS NOT NULL AND (")
+        .push(ACTIVE).push(")>0)))");
     capacity
         .push(" FROM channels c WHERE c.id=")
         .push_bind(channel);

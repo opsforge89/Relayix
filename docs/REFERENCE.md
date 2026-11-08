@@ -99,13 +99,39 @@ Mattermost supports both existing incoming webhooks and **Bot / REST API**. Ente
 
 Configure a channel, use Test, and assign it to a route. Enter a route name and select recipients; a unique permanent webhook address is generated automatically. Existing `/h/{slug}` addresses and hashed `X-Relay-Key` values are preserved. Renaming a route never changes its address. Routes shows the full, selectable endpoint without ellipsis; key-copy feedback is displayed inside the key dialog. Changing recipients does not require changing the sending integration.
 
+### Integration capabilities and message limits
+
+All incoming notifications share the same input limits: **256 UTF-8 bytes for the title** and **10,000 UTF-8 bytes for the message**. Larger inputs are rejected before delivery. These limits also apply to integrations without an additional delivery cap below. UTF-8 bytes differ from characters: Cyrillic letters usually use two bytes, and many emoji use four.
+
+The table describes the adapters and delivery limits enforced by Relayix. Destination servers can impose additional size, permission and rate limits, including instance-specific settings.
+
+| Integration | Delivery and required settings | Relayix delivery limit | Capabilities and restrictions |
+| --- | --- | --- | --- |
+| Telegram | Bot token and chat ID; optional topic ID | 4,096 UTF-16 units for the combined rendered title and message; shortened when necessary | Bold and HTTP/HTTPS links; Bot API, MTProto or WEB-proxy transport. Emoji can use two units; rendered markup also consumes the allowance. |
+| Matrix | Homeserver URL, access token and room ID | Accepted content is sent without additional truncation; server limits apply | Plain-text room messages. Invite the bot to an unencrypted room; room aliases and encrypted rooms are unsupported. Retries reuse the transaction ID. |
+| Mattermost | Incoming webhook URL, or server URL and bot/personal token with a channel ID or direct-message recipient | Accepted content is sent without additional truncation; server limits apply | Bold and HTTP/HTTPS links. Bot API supports channels and direct messages; the sender needs access to the destination. |
+| Rocket.Chat | Incoming webhook URL | 5,000 UTF-16 units for the combined title and message; shortened when necessary | Sends a text webhook payload. Emoji can use two units. Instance-specific limits can be lower. |
+| Slack | Incoming webhook URL | Accepted content is sent without additional truncation; service limits apply | Sends the combined title and message in the webhook's text field. |
+| Discord | Incoming webhook URL | 2,000 UTF-16 units for the combined title and message; shortened when necessary | Sends webhook message content. Emoji can use two units. |
+| Microsoft Teams | Compatible webhook URL | Accepted content is sent without additional truncation; endpoint limits apply | Requires an endpoint accepting a JSON text payload; compatibility depends on the configured webhook or workflow. |
+| Google Chat | Space webhook URL | 32,000 UTF-8 bytes for the serialized JSON payload; shortened when necessary | Title and message share the budget with JSON syntax and escaping, so quotes, backslashes and control characters can use extra space. |
+| ntfy | Server URL and topic | Title: 1,024 UTF-8 bytes; message: 4,096 UTF-8 bytes; shortened separately | Title is sent as an HTTP header; body and title have separate budgets. Topic names allow ASCII letters, digits, hyphens and underscores. |
+| Pushover | Application API token and user/group key | Title: 250 Unicode characters; message: 1,024 Unicode characters; shortened separately | Title and message have separate budgets. Characters are counted as Unicode code points, rather than UTF-8 bytes. |
+| Gotify | Server URL and application token | Accepted content is sent without additional truncation; server limits apply | Sends separate title, message and priority fields. |
+| Email (SMTP) | SMTP host, port, TLS mode, sender and recipient; paired username/password when authentication is required | Accepted content is sent without additional truncation; mail server limits apply | Plain-text email; one recipient mailbox per channel. STARTTLS or TLS; unencrypted SMTP requires explicit server configuration. |
+| Webhook | Destination URL; optional administrator-managed JSON body template | Accepted content is sent without additional truncation; endpoint limits apply | Default JSON payload or a custom JSON object template. Templates have a separate 16 KiB configuration limit and are managed only by administrators. |
+
+For combined text limits, the title, separating line breaks and message share one allowance. Relayix shortens oversized deliveries with a visible `[Message truncated]` marker; separately limited titles use `[truncated]`. Markers count toward the limits. Complete incoming content remains in history, and truncation preserves valid Unicode and Telegram markup. Changing a destination's own limit does not change Relayix's configured delivery cap.
+
 ### Automatic message formatting
+
+The channel creation and editing form shows the incoming title/message size limits and the selected integration's delivery limits, including how oversized deliveries are shortened. Incoming notifications accept at most 256 UTF-8 bytes for the title and 10,000 UTF-8 bytes for the message; larger inputs are rejected.
 
 Send a message with or without a title and tags. Telegram and Mattermost automatically render paired `**bold**` spans and `[label](https://url)` links in the common message. Titles are included only when supplied and nonblank; no fallback heading is added. Title-only events are delivered once. There are no content or formatting settings to configure, and legacy `message_mode` / `text_format` values are ignored.
 
 Relayix escapes user text and uses Telegram HTML for Bot API, Unicode-correct entities for MTProto/WEB, and Mattermost Markdown for webhook, channel and direct-message delivery. HTTP/HTTPS links are supported; unsafe schemes and credential-bearing links stay literal. Other text is literal. This common format supports bold and links rather than a full Markdown syntax. Message spacing and line breaks are preserved.
 
-Tags remain UI metadata and do not filter or decorate outgoing messages. Omitted priority defaults to 3. Untitled rows show **View message** to open and copy the complete original body. Original event text remains stored in history.
+Tags remain UI metadata and do not filter or decorate outgoing messages. Omitted priority defaults to 3. Untitled rows show **View message** to open and copy the complete original body. Original event text remains stored in history. Rocket.Chat deliveries are capped at 5,000 UTF-16 units including the title and a visible truncation marker when needed.
 
 ```json
 {"title":"Deployment complete","message":"**Tests passed**\n[TASK-123](https://tickets.example.org/TASK-123)","tags":["deploy"]}
@@ -127,7 +153,7 @@ Matrix requires a homeserver URL, bot access token and a room ID such as `!room:
 
 SMTP supports STARTTLS (usually port 587), implicit TLS (usually 465), optional paired username/password, sender and one recipient mailbox per channel. Add multiple channels for multiple mailboxes. Unencrypted SMTP requires explicitly setting `ALLOW_INSECURE_HTTP=true`, which also permits LAN HTTP webhook destinations.
 
-Secret fields are masked in channel responses, and unchanged masked values are preserved when editing. Channel credentials remain stored in PostgreSQL; restrict volume and backup access.
+Secret fields are masked in channel responses, and unchanged masked values are preserved when editing. Changing the channel type, URL, SMTP host/port/TLS mode or any `proxy_*` setting or WEB-proxy address requires re-entering all masked secrets; updates and draft diagnostics reject masked values in that case. Channel credentials remain stored in PostgreSQL; restrict volume and backup access.
 
 ### Tags
 
@@ -156,7 +182,23 @@ Every accepted webhook returns `event_id`, `queued` and `routing`. Routing diagn
 
 Use **Routes → Test webhook** to copy an example JSON or send a real event through the same routing/queue code. Priority and comma-separated tags may be left empty. The result explains priority/recipient decisions and links to Deliveries for the actual send outcome. Copying JSON does not send an event.
 
-A successful response confirms queuing, not delivery. Check Deliveries for the result. The PostgreSQL worker uses row locking, stale-worker recovery and five attempts with exponential backoff; delivery is at least once.
+A successful response confirms queuing, not delivery. Check Deliveries for the result. The PostgreSQL worker uses row locking and stale-worker recovery; delivery is at least once. Temporary errors receive up to five attempts per retry cycle with exponential backoff. Permanent errors finish immediately and can activate configured fallback recipients.
+
+### Message previews
+
+In a channel's creation or editing form, open **Preview a message**, enter a title/body, and choose **Preview message**. In a route's **Test webhook** dialog, choose **Preview routing and messages** to apply the route template and inspect every primary and fallback recipient. Each preview shows the actual rendered output, field sizes, delivery budgets and visible truncation markers. Telegram bold/links and Mattermost formatting are displayed safely; **Exact outgoing text** shows the adapter text. Custom webhook JSON previews are available only to administrators because template values can contain credentials.
+
+Previewing stores no event, consumes no route quota and contacts no destination service. Preview results disappear when their input changes. A preview checks presentation; **Diagnose** checks connectivity and **Test** makes a real send.
+
+### Retries and channel recovery
+
+HTTP 401/403 failures are reported as authentication/permission errors; other permanent request failures (such as 400, 404 or 413) also stop the delivery immediately. HTTP 408, 409, 425, 429 and 5xx responses, timeouts and connection failures use automatic retries. SMTP permanent responses and Telegram credential/destination errors stop immediately. Temporary SMTP and Telegram transport errors retry. Fallback recipients are queued after a permanent primary failure or after five unsuccessful transient attempts.
+
+Relayix waits for the greater of exponential backoff and the provider's retry delay. It accepts HTTP `Retry-After` seconds or dates, Telegram Bot API `parameters.retry_after`, Telegram MTProto/WEB flood-wait seconds, and Matrix `retry_after_ms`. Missing or invalid delay values use normal backoff. **Delivery attempts** shows the failure category and earliest next attempt time.
+
+After three consecutive failures with the same error, automatic delivery to that channel pauses for at least 60 seconds. A provider rate limit or explicit retry delay starts a cooldown immediately, lasting at least the requested delay. Both ordinary and alert queues share this state in PostgreSQL across workers and replicas. Queued messages stay queued without consuming attempts while paused; other channels continue delivering.
+
+After cooldown expiry, only one queued attempt may probe the channel across both queues. A successful probe clears the failure state and releases the backlog; another failure renews the cooldown. An already-running successful send cannot clear an active cooldown. **Channels** shows the pause deadline and reason, or **Probe pending** after expiry. Recovery needs queued work; Relayix does not send synthetic probe messages. Manual queue retries preserve channel cooldowns. Explicit direct **Test** sends and diagnostics remain available to check a repaired configuration.
 
 ## Failure alerts
 
@@ -245,14 +287,15 @@ Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorizati
 | PUT / DELETE | `/api/channels/{id}` | Edit/delete channel |
 | POST | `/api/channels/{id}/test` | Direct test notification |
 | POST | `/api/channels/{id}/diagnose` | Read-only diagnostics for saved settings |
-| POST | `/api/channels/diagnose` | Read-only draft diagnostics; optional id restores masked secrets |
+| POST | `/api/channels/diagnose` | Read-only draft diagnostics; optional id restores masked secrets for unchanged destinations |
+| POST | `/api/channels/preview` | Render a draft message without storing or sending; accepts kind, config, title, message and optional priority |
 | GET / POST | `/api/routes` | List/create routes |
 | PUT / DELETE | `/api/routes/{id}` | Edit/delete route |
 | POST | `/api/routes/{id}/rotate` | Rotate route key |
 | POST | `/api/routes/{id}/test` | Send a real test event through route filters and return routing diagnostics; authenticated users only |
-| POST | `/api/routes/{id}/preview` | Preview routing without storing or sending |
+| POST | `/api/routes/{id}/preview` | Preview routing, route template and per-channel presentations without storing or sending |
 | GET | `/api/events` | Incoming event history and original routing diagnostics |
-| GET | `/api/deliveries/{id}/attempts` | Latest 100 attempt records and total attempts |
+| GET | `/api/deliveries/{id}/attempts` | Latest 100 attempts, failure category, next attempt time and channel health |
 | GET | `/api/stats` | Delivery and failure counters |
 | GET | `/api/deliveries` | `{items,total,page,page_size}` with filters |
 | POST | `/api/deliveries/{id}/retry` | Retry failed/retrying delivery |

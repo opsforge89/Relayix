@@ -60,7 +60,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Release image: `ghcr.io/opsforge89/relayix:0.8.7`.
+Release image: `ghcr.io/opsforge89/relayix:0.8.8`.
 
 Change the app image tag in `compose.yaml`, then run:
 
@@ -82,6 +82,8 @@ Current interface with fictional demonstration data.
 ![Relayix 0.8.2 template editor with categorized fields and examples — light theme](docs/screenshots/relayix-template-editor-light.png)
 
 ## Documentation
+
+[Integration capabilities and limits](docs/REFERENCE.md#integration-capabilities-and-message-limits) · [Message previews](docs/REFERENCE.md#message-previews) · [Retries and channel recovery](docs/REFERENCE.md#retries-and-channel-recovery)
 
 [Setup](docs/DEPLOYMENT.md) · [User guide and API](docs/REFERENCE.md) · [Proxies](docs/PROXIES.md) · [GitHub and CI](docs/GITHUB.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 

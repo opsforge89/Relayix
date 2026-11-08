@@ -156,7 +156,7 @@ def main():
             print(json.dumps({'ok': True}))
     except Exception as exc:
         # Never echo Telegram/proxy exception strings, tokens, URLs or configuration.
-        print(json.dumps({'ok': False, 'code': error_code(exc)}))
+        print(json.dumps({'ok': False, 'code': error_code(exc), **({'retry_after': max(0, int(exc.seconds))} if isinstance(exc, errors.FloodWaitError) else {})}))
         raise SystemExit(1)
 
 

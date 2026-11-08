@@ -173,7 +173,7 @@ mod tests {
         mask(&mut masked);
         assert_eq!(masked["proxy_password"], "********");
         assert_eq!(masked["proxy_username"], "********");
-        restore_masked(&mut masked, &cfg);
+        restore_masked(&mut masked, &cfg, "webhook", "webhook").unwrap();
         assert_eq!(masked, cfg);
     }
     #[tokio::test]

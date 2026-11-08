@@ -199,7 +199,7 @@ pub async fn retry(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::require_admin(&h, &s).await?;
-    let result=sqlx::query("UPDATE alert_deliveries SET status='queued',attempts=0,error=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND status='failed' AND owner_user_id IS NULL").bind(id).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE alert_deliveries SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND status='failed' AND owner_user_id IS NULL").bind(id).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,
@@ -343,7 +343,7 @@ pub async fn retry_personal(
     if !exists {
         return Err(err(StatusCode::NOT_FOUND, "Alert delivery not found"));
     }
-    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND owner_user_id=$2 AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND owner_user_id=$2 AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,
@@ -491,17 +491,28 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
             _ => Err(anyhow!("Alert recipient removed or disabled")),
         }
     };
-    match lease::guard(&s.db, lease::Queue::Alert, id, number, work).await {
+    let outcome = lease::guard(&s.db, lease::Queue::Alert, id, number, work).await;
+    let mut tx = s.db.begin().await?;
+    channel_health::lock(&mut tx, cid).await?;
+    let owned: Option<Uuid> = sqlx::query_scalar("SELECT id FROM alert_deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE")
+        .bind(id).bind(number).fetch_optional(&mut *tx).await?;
+    if owned.is_none() { return Ok(lease::Claim::Ready(())); }
+    match outcome {
         Ok(Outcome::Sent) => {
-            sqlx::query("UPDATE alert_deliveries SET status='sent',sent_at=NOW(),error=NULL,locked_at=NULL WHERE id=$1 AND attempts=$2 AND status='processing'").bind(id).bind(number).execute(&s.db).await?;
+            channel_health::record(&mut tx, cid, &Ok(()), number, s.retry_seconds).await?;
+            sqlx::query("UPDATE alert_deliveries SET status='sent',sent_at=NOW(),error=NULL,error_category=NULL,locked_at=NULL WHERE id=$1").bind(id).execute(&mut *tx).await?;
         }
         Ok(Outcome::Disabled) => {
-            sqlx::query("UPDATE alert_deliveries SET status='failed',locked_at=NULL,error='Account or subscription disabled' WHERE id=$1 AND attempts=$2 AND status='processing'").bind(id).bind(number).execute(&s.db).await?;
+            sqlx::query("UPDATE alert_deliveries SET status='failed',locked_at=NULL,error='Account or subscription disabled',error_category='configuration' WHERE id=$1").bind(id).execute(&mut *tx).await?;
         }
         Err(error) => {
-            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,error=$2,locked_at=NULL,next_attempt_at=NOW()+POWER(2,LEAST(attempts,8))::int*$3::int*INTERVAL '1 second' WHERE id=$1 AND attempts=$4 AND status='processing'").bind(id).bind(error.to_string().chars().take(512).collect::<String>()).bind(s.retry_seconds).bind(number).execute(&s.db).await?;
+            let plan = retry_policy::plan(&error, number, s.retry_seconds);
+            channel_health::record(&mut tx, cid, &Err(error), number, s.retry_seconds).await?;
+            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 OR $2 THEN 'failed' ELSE 'queued' END,error=(SELECT last_error FROM channel_health WHERE channel_id=$3),error_category=$4,locked_at=NULL,next_attempt_at=NOW()+$5::int*INTERVAL '1 second' WHERE id=$1")
+                .bind(id).bind(plan.permanent).bind(cid).bind(plan.category).bind(plan.delay).execute(&mut *tx).await?;
         }
     }
+    tx.commit().await?;
     Ok(lease::Claim::Ready(()))
 }
 
