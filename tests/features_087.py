@@ -33,7 +33,7 @@ def wait(predicate):
     raise AssertionError('Feature regression timed out')
 def raw_received(path):
     with urllib.request.urlopen('http://mock:8000/received',timeout=5) as r:
-        return [item['body'] for item in json.load(r) if item['path']==path]
+        return [item['body'] for item in json.load(r) if item.get('path')==path]
 def received(path):return [json.loads(body) for body in raw_received(path)]
 
 channels=[];routes=[];members=[]
