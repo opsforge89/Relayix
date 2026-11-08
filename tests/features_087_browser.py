@@ -38,7 +38,7 @@ with sync_playwright() as p:
         ok(saved.value);expect(editor).not_to_be_visible()
         assert next(c for c in ok(api.get('/api/channels')) if c['id']==channel)['config']['body_template']==body
         nav('Routes')
-        page.locator('.route-row').filter(has=page.get_by_text('087 UI rate limit',exact=True)).get_by_role('button',name='Edit',exact=True).click()
+        page.get_by_role('button',name='Edit route 087 UI rate limit',exact=True).click()
         editor=page.get_by_role('dialog',name='Edit route',exact=True)
         editor.get_by_label('Route rate limit per minute',exact=True).fill('3')
         with page.expect_response(lambda r:r.url.endswith('/api/routes/'+route['id']) and r.request.method=='PUT') as saved:
