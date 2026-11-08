@@ -131,6 +131,8 @@ def verify(api, anonymous):
         # Verify early-warning and threshold modes independently of final failures.
         two.ok('/api/auth/delivery-alerts',{**settings,'watch_route_ids':[clone['id']],'trigger_mode':'first_error'},'PUT')
         def held_failure():
+            # Alert subscription tests advance only their failing channel's cooldown.
+            sql("UPDATE channel_health SET paused_until=NOW()-INTERVAL '1 second' WHERE channel_id='"+channels[0]+"' AND paused_until IS NOT NULL")
             event=anonymous.ok(clone['endpoint'],{'suite':'Retrying','passed':0,'failed':1},'POST',{'X-Relay-Key':clone['token']})['event_id']
             wait(lambda:sql("SELECT COALESCE(error,'') FROM deliveries WHERE event_id='"+event+"' AND channel_id='"+channels[0]+"'"))
             sql("UPDATE deliveries SET next_attempt_at=NOW()+INTERVAL '1 hour' WHERE event_id='"+event+"' AND channel_id='"+channels[0]+"'")
