@@ -147,6 +147,40 @@ async fn finish(s: &AppState, id: Uuid, number: i32, result: Result<()>) -> Resu
     tx.commit().await?;
     Ok(())
 }
+async fn deliver_owned(
+    s: &AppState,
+    id: Uuid,
+    cid: Uuid,
+    number: i32,
+    priority: i32,
+    payload: &Value,
+) -> Result<()> {
+    let work = async {
+        let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+            .bind(cid)
+            .fetch_optional(&s.db)
+            .await;
+        match channel {
+            Ok(Some(c)) if c.enabled => {
+                send(
+                    &s.client,
+                    &c,
+                    message::event_title(payload),
+                    message::event_message(payload),
+                    priority,
+                    s.allow_http,
+                    id,
+                )
+                .await
+            }
+            Ok(Some(_)) => Err(anyhow!("Channel disabled")),
+            Ok(None) => Err(anyhow!("Channel removed")),
+            Err(_) => Err(anyhow!("Channel lookup failed")),
+        }
+    };
+    lease::guard(&s.db, lease::Queue::Delivery, id, number, work).await
+}
+
 pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
     loop {
         if *stop.borrow() {
@@ -154,20 +188,7 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
         }
         match claim(&s).await {
             Ok(Some((id, priority, cid, number, payload))) => {
-                let title = message::event_title(&payload);
-                let message = message::event_message(&payload);
-                let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
-                    .bind(cid)
-                    .fetch_optional(&s.db)
-                    .await;
-                let result = match channel {
-                    Ok(Some(c)) if c.enabled => {
-                        send(&s.client, &c, title, message, priority, s.allow_http, id).await
-                    }
-                    Ok(Some(_)) => Err(anyhow!("Channel disabled")),
-                    Ok(None) => Err(anyhow!("Channel removed")),
-                    Err(_) => Err(anyhow!("Channel lookup failed")),
-                };
+                let result = deliver_owned(&s, id, cid, number, priority, &payload).await;
                 if let Err(e) = finish(&s, id, number, result).await {
                     tracing::error!(%e,%id,"worker result update failed");
                     runtime::pause(&mut stop, Duration::from_secs(3)).await;

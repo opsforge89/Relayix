@@ -453,35 +453,46 @@ async fn schedule(s: &AppState) -> Result<()> {
 
 async fn send_next(s: &AppState) -> Result<bool> {
     let mut tx = s.db.begin().await?;
-    let row:Option<(Uuid,Uuid,String,String)>=sqlx::query_as("SELECT id,channel_id,title,message FROM alert_deliveries WHERE (status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
-    let Some((id, cid, title, message)) = row else {
+    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE (status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+    let Some((id, cid, title, message, number)) = row else {
         return Ok(false);
     };
     sqlx::query("UPDATE alert_deliveries SET status='processing',locked_at=NOW(),attempts=attempts+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
-    let allowed:bool=sqlx::query_scalar("SELECT a.owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN alert_policies p ON p.owner_user_id=u.id WHERE u.id=a.owner_user_id AND u.enabled AND p.enabled AND p.id=a.policy_id) FROM alert_deliveries a WHERE a.id=$1").bind(id).fetch_one(&s.db).await?;
-    if !allowed {
-        sqlx::query("UPDATE alert_deliveries SET status='failed',locked_at=NULL,error='Account or subscription disabled' WHERE id=$1").bind(id).execute(&s.db).await?;
-        return Ok(true);
+    enum Outcome {
+        Sent,
+        Disabled,
     }
-    let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
-        .bind(cid)
-        .fetch_optional(&s.db)
-        .await?;
-    let result = match channel {
-        Some(c) if c.enabled => send(&s.client, &c, &title, &message, 4, s.allow_http, id).await,
-        _ => Err(anyhow!("Alert recipient removed or disabled")),
+    let work = async {
+        let allowed:bool=sqlx::query_scalar("SELECT a.owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN alert_policies p ON p.owner_user_id=u.id WHERE u.id=a.owner_user_id AND u.enabled AND p.enabled AND p.id=a.policy_id) FROM alert_deliveries a WHERE a.id=$1").bind(id).fetch_one(&s.db).await?;
+        if !allowed {
+            return Ok(Outcome::Disabled);
+        }
+        let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+            .bind(cid)
+            .fetch_optional(&s.db)
+            .await?;
+        match channel {
+            Some(c) if c.enabled => send(&s.client, &c, &title, &message, 4, s.allow_http, id)
+                .await
+                .map(|_| Outcome::Sent),
+            _ => Err(anyhow!("Alert recipient removed or disabled")),
+        }
     };
-    match result {
-        Ok(()) => {
-            sqlx::query("UPDATE alert_deliveries SET status='sent',sent_at=NOW(),error=NULL,locked_at=NULL WHERE id=$1").bind(id).execute(&s.db).await?;
+    match lease::guard(&s.db, lease::Queue::Alert, id, number, work).await {
+        Ok(Outcome::Sent) => {
+            sqlx::query("UPDATE alert_deliveries SET status='sent',sent_at=NOW(),error=NULL,locked_at=NULL WHERE id=$1 AND attempts=$2 AND status='processing'").bind(id).bind(number).execute(&s.db).await?;
+        }
+        Ok(Outcome::Disabled) => {
+            sqlx::query("UPDATE alert_deliveries SET status='failed',locked_at=NULL,error='Account or subscription disabled' WHERE id=$1 AND attempts=$2 AND status='processing'").bind(id).bind(number).execute(&s.db).await?;
         }
         Err(error) => {
-            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,error=$2,locked_at=NULL,next_attempt_at=NOW()+POWER(2,LEAST(attempts,8))::int*$3::int*INTERVAL '1 second' WHERE id=$1").bind(id).bind(error.to_string().chars().take(512).collect::<String>()).bind(s.retry_seconds).execute(&s.db).await?;
+            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,error=$2,locked_at=NULL,next_attempt_at=NOW()+POWER(2,LEAST(attempts,8))::int*$3::int*INTERVAL '1 second' WHERE id=$1 AND attempts=$4 AND status='processing'").bind(id).bind(error.to_string().chars().take(512).collect::<String>()).bind(s.retry_seconds).bind(number).execute(&s.db).await?;
         }
     }
     Ok(true)
 }
+
 pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
     let mut last_schedule = tokio::time::Instant::now() - Duration::from_secs(10);
     loop {

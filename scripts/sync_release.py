@@ -20,6 +20,7 @@ files={
  'tests/compose.yaml':r'(relayix(?:-checks|-browser)?:)\d+\.\d+\.\d+',
  'tests/compose_databases.py':r'(?<=relayix:)\d+\.\d+\.\d+',
  'tests/compose_modes.py':r'(?<=relayix:)\d+\.\d+\.\d+',
+ 'tests/release_084.py':r'(?<=relayix:)\d+\.\d+\.\d+',
  'tests/startup.py':r'(?<=relayix:)\d+\.\d+\.\d+',
  'tests/upgrade.py':r"(?<=RELAYIX_TEST_IMAGE','relayix:)\d+\.\d+\.\d+|(?<='version']==')\d+\.\d+\.\d+",
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.4 Beta — 2026-11-08
+
+- Add explicit CIDR-based `TRUSTED_PROXIES` and select client addresses from trusted X-Forwarded-For chains for both request quotas and failed-login windows. Ignore forwarded headers from untrusted peers.
+- Aggregate IPv6 request and login-failure identities by /64, including canonical handling of IPv4-mapped IPv6 addresses.
+- Renew active delivery leases while waiting for Telegram capacity or network I/O; cancel work if ownership is lost or renewal fails. Preserve the existing 60-second send deadline and attempt-number fencing.
+
 ## 0.8.3 Beta — 2026-11-08
 
 - Block private and special-use outbound addresses, check DNS answers at connection time, disable redirects/environment proxies and add an explicit IP/CIDR `OUTBOUND_ALLOWLIST` for internal services. Pin SMTP and Telegram proxy addresses, retaining TLS hostnames.

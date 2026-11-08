@@ -200,7 +200,7 @@ pub struct Login {
 pub async fn login(
     State(s): State<AppState>,
     h: HeaderMap,
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::Extension(client): axum::Extension<client_ip::ClientIp>,
     Json(input): Json<Login>,
 ) -> std::result::Result<(HeaderMap, Json<Principal>), (StatusCode, Json<Value>)> {
     if h.get("x-relay-client").and_then(|v| v.to_str().ok()) != Some("web") {
@@ -210,7 +210,7 @@ pub async fn login(
     if username.len() > 64 || input.password.len() > 512 {
         return Err(unauthorized());
     }
-    let attempt_key = hash(&format!("{}:{username}", peer.ip()));
+    let attempt_key = hash(&format!("{}:{username}", client.key()));
     sqlx::query("DELETE FROM login_attempts WHERE window_started_at<NOW()-INTERVAL '15 minutes'")
         .execute(&s.db)
         .await
