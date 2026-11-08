@@ -10,7 +10,7 @@ The local origin is connected to https://github.com/opsforge89/Relayix.git and b
 git remote -v  # origin: https://github.com/opsforge89/Relayix.git
 git add .
 git diff --cached --stat
-git commit -m "Prepare Relayix 0.8.6 Beta"
+git commit -m "Prepare Relayix 0.8.7 Beta"
 git push -u origin main
 ```
 
@@ -20,24 +20,24 @@ In repository settings enable Actions and Packages. Protect `main` against force
 
 ## Continuous integration
 
-`Verify` is a reusable workflow called only by `Release Docker image`. It does not run automatically on PRs or pushes to `main`, and has no standalone manual trigger. A push to `main` starts one pipeline: run the full suite once, create the version tag, then build/publish the production image only when `verify` succeeds. PRs and tag pushes do not start another run.
+`PR checks` runs Rust formatting, Clippy, `cargo test --locked`, ESLint and `npm test` directly on GitHub-hosted runners, with pinned toolchains and dependency caches. It does not use Docker, integration environments or package publishing credentials. Changes limited to `docs/**` and root `*.md` files skip this workflow. Do not make path-filtered PR checks required without a documentation-only fallback, since GitHub otherwise leaves their required statuses pending.
 
-The verification job builds the Docker `verified` target, which enforces Rust formatting, Clippy, `cargo test --locked --release`, frontend ESLint and unit tests. It audits Cargo dependencies, scans the runtime image for fixable HIGH/CRITICAL vulnerabilities, and runs `scripts/check.sh --skip-app-build` for API, queue, SMTP and Chromium tests using temporary PostgreSQL and local mocks. The verification image is needed for these integration tests and is never published. Test resources are cleaned up even on failure; screenshots and failure logs are retained for seven days.
-
-The production Docker target shares application/runtime stages with the verification image but has no dependency on the Rust/frontend check stages. After all tests pass, `publish` builds that target and pushes it, without running tests again. Local test runs are not part of the release process.
+A non-documentation push to `main` starts `Release Docker image`, which calls the full `Verify` workflow once. The release trigger uses the same documentation filters; a deliberate manual dispatch can still run a release. The full suite includes source/history secret scans, deployment tests, Rust/frontend checks, dependency audit, runtime image scanning, API, queue, SMTP and Chromium regressions. No local tests/builds are part of this process. Artifacts remain available for seven days.
 
 ## Continuous delivery
 
-Merge a release PR into `main` with the version in `Cargo.toml`, generated manifests and changelog already updated. The `Release Docker image` workflow runs automatically for that exact merge commit:
+Prepare a release PR with the Cargo version, synchronized manifests, changelog and documentation, then merge it to `main`:
 
-1. Run all tests/scans once on GitHub, using the isolated verification runtime.
-2. After success, create the annotated `v<version>` tag on that same commit.
-3. Build the `production` target without rerunning tests and publish `ghcr.io/opsforge89/relayix:<version>` and `:beta`.
-4. Create the GitHub Beta release and attach the standalone Compose/environment files; documentation is versioned in the same tagged commit.
+1. Bake builds a local production OCI archive and the verification target together, sharing the exact runtime graph. The archive includes provenance/SBOM. Neither image is pushed to GHCR before tests; build caches use GitHub Actions storage.
+2. CI pins the production digest, checks shared runtime layers/labels, and runs runtime/integration tests against the exact archive runtime. Rust/frontend checks are enforced by the verification target. Only after all checks pass is the archive uploaded as a one-day workflow artifact for the publish job.
+3. After every check succeeds, publishing creates the annotated version tag on that commit. Skopeo uploads the passed archive under `sha-<commit>` with all attestations and `--preserve-digests`; a digest mismatch stops promotion. [`docker buildx imagetools create`](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/) assigns the version and `:beta` to that digest without rebuilding.
+4. GitHub publishes the Beta release, standalone Compose/environment files, and documentation at that same tagged commit.
 
-The tag push does not trigger another workflow. An existing tag at a different commit is never moved: the workflow completes verification but skips publication until the Cargo version is advanced. A manual dispatch on `main` can retry a failed run at the same commit; use GitHub's rerun action on the original run if `main` has advanced.
+Failed candidates remain only on the ephemeral verification runner and are never pushed to GHCR. An interrupted successful publish may leave a passed `sha-<commit>` staging tag, but no untested image. GitHub cache/build-record artifacts are not releases. Promotion consumes the digest output, never a mutable staging tag. Version and `beta` tags are never updated after a failed verification.
 
-Publishing uses the repository-scoped `GITHUB_TOKEN` with `packages:write` and `contents:write`; no personal token is required. Images include source/revision labels, provenance and an SBOM. Tags are Beta releases; the pipeline does not publish `latest`.
+Tag pushes do not start another workflow. Existing tags on a different commit are never moved: advance the Cargo version for a new release. Retry a failed workflow at its original commit with GitHub's rerun action. A manual dispatch on `main` deliberately bypasses the documentation path filter but retains all checks.
+
+Publishing uses repository-scoped `GITHUB_TOKEN` permissions: verification has only `contents:read`; publishing needs `packages:write`/`contents:write` to promote/create the release. PR jobs have only `contents:read`. No personal token is needed for publication. Images are Beta and are not tagged `latest`.
 
 Container package visibility is controlled in GitHub Packages. For anonymous pulls set the package public. For private pulls authenticate on the deployment host with a token allowed to read that package; do not commit the credential.
 
@@ -63,7 +63,7 @@ Use **Variables** for nonsecret configuration:
 - `RELAYIX_HEALTH_URL`: `http://192.168.39.110:8080/healthz` for this installation.
 - `RELAYIX_ADMIN_USERNAME`, `RELAYIX_BIND_ADDRESS`, `RELAYIX_PORT`, `RELAYIX_COOKIE_SECURE`, `RELAYIX_ALLOW_INSECURE_HTTP` and `RELAYIX_RUST_LOG` configure the app.
 - `RELAYIX_NETWORK_SUBNET` and `RELAYIX_NETWORK_GATEWAY` select the stable Compose bridge; unset proxy trust follows its gateway. `RELAYIX_WEBHOOK_RATE_LIMIT_PER_MINUTE` changes the webhook quota (default 600).
-- `RELAYIX_TRUSTED_PROXIES`, `RELAYIX_OUTBOUND_ALLOWLIST`, `RELAYIX_DELIVERY_WORKERS` and `RELAYIX_EVENT_RETENTION_DAYS` configure forwarded client identity, outbound access, delivery concurrency and retention.
+- `RELAYIX_TRUSTED_PROXIES`, `RELAYIX_OUTBOUND_ALLOWLIST`, `RELAYIX_DELIVERY_PROXY_CONCURRENCY`, `RELAYIX_DELIVERY_CHANNEL_CONCURRENCY`, `RELAYIX_DELIVERY_WORKERS` and `RELAYIX_EVENT_RETENTION_DAYS` configure forwarded client identity, outbound access, delivery concurrency and retention.
 - `RELAYIX_DATABASE_MODE`, `RELAYIX_POSTGRES_HOST`, `RELAYIX_POSTGRES_PORT`, `RELAYIX_POSTGRES_USER`, `RELAYIX_POSTGRES_DB`, `RELAYIX_POSTGRES_SSLMODE` and optional `RELAYIX_POSTGRES_SSLROOTCERT` configure database access.
 - `RELAYIX_POSTGRES_IMAGE`, `RELAYIX_POSTGRES_CLIENT_IMAGE` and `RELAYIX_DB_VOLUME` preserve database image and storage selection.
 

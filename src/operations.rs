@@ -101,10 +101,22 @@ pub async fn attempts(
     ))
 }
 
-async fn claim(s: &AppState) -> Result<Option<(Uuid, i32, Uuid, i32, Value)>> {
+async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value)>> {
     let mut tx = s.db.begin().await?;
+    let channel = match lease::claim_channel(
+        &mut tx,
+        lease::Queue::Delivery,
+        s.channel_concurrency,
+        s.proxy_concurrency,
+    )
+    .await?
+    {
+        lease::Claim::Ready(channel) => channel,
+        lease::Claim::Idle => return Ok(lease::Claim::Idle),
+        lease::Claim::Contended => return Ok(lease::Claim::Contended),
+    };
     let row:Option<(Uuid,i32,Uuid,i32,Value)>=sqlx::query_as(
-  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE (d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes') ORDER BY d.created_at FOR UPDATE OF d SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     if let Some((id, _, _, number, _)) = &row {
         sqlx::query("UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Worker lease expired; outcome unknown' WHERE delivery_id=$1 AND status='processing'").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE deliveries SET status='processing',locked_at=NOW(),attempts=attempts+1,cycle_attempts=cycle_attempts+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
@@ -115,7 +127,10 @@ async fn claim(s: &AppState) -> Result<Option<(Uuid, i32, Uuid, i32, Value)>> {
             .await?;
     }
     tx.commit().await?;
-    Ok(row)
+    Ok(match row {
+        Some(row) => lease::Claim::Ready(row),
+        None => lease::Claim::Contended,
+    })
 }
 async fn finish(s: &AppState, id: Uuid, number: i32, result: Result<()>) -> Result<()> {
     let mut tx = s.db.begin().await?;
@@ -187,14 +202,17 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
             break;
         }
         match claim(&s).await {
-            Ok(Some((id, priority, cid, number, payload))) => {
+            Ok(lease::Claim::Ready((id, priority, cid, number, payload))) => {
                 let result = deliver_owned(&s, id, cid, number, priority, &payload).await;
                 if let Err(e) = finish(&s, id, number, result).await {
                     tracing::error!(%e,%id,"worker result update failed");
                     runtime::pause(&mut stop, Duration::from_secs(3)).await;
                 }
             }
-            Ok(None) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
+            Ok(lease::Claim::Contended) => {
+                runtime::pause(&mut stop, Duration::from_millis(20)).await
+            }
+            Ok(lease::Claim::Idle) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
             Err(e) => {
                 tracing::warn!(%e,"worker poll error");
                 runtime::pause(&mut stop, Duration::from_secs(3)).await;

@@ -9,7 +9,7 @@ import uuid
 
 ROOT=Path(__file__).resolve().parents[1]
 project='relayix-test-084-'+uuid.uuid4().hex[:10]
-image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.6')
+image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.7')
 
 def run(args,**kwargs):
     result=subprocess.run(args,capture_output=True,text=True,timeout=100,**kwargs)
@@ -53,6 +53,7 @@ assert codes[-1]==429 and 429 in codes
 print('PASS: untrusted direct peers cannot spoof their quota identity')
 """
         print(dc('exec','-T','mock','python3','-c',probe),flush=True)
+        assert 'Ignoring X-Forwarded-For from an untrusted peer' in dc('logs','--no-color','app')
         fixture=app("""import json,os,urllib.request,uuid
 def api(path,data,headers=None):
  h={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['ADMIN_TOKEN']};h.update(headers or {})
@@ -120,6 +121,108 @@ print(json.dumps(json.load(urllib.request.urlopen(r))))
         assert not (state/(target+'.finished')).exists()
         assert sql(f"SELECT status||':'||attempts FROM deliveries WHERE id='{target}'")=='processing:2'
         print('PASS: losing an attempt lease cancels its Telegram subprocess and fences its completion',flush=True)
+        # Return to the production default and use two real app processes. Backlog
+        # on one held Telegram channel must leave capacity for a later healthy channel.
+        sql(f"UPDATE deliveries SET status='failed',locked_at=NULL WHERE id='{target}'")
+        env['RELAYIX_TEST_CHANNEL_CONCURRENCY']='2'
+        env['RELAYIX_TEST_WORKERS']='4'
+        dc('up','-d','--force-recreate','--wait','--wait-timeout','60','app')
+        dc('up','-d','--force-recreate','replica')
+        dc('exec','-T','replica','python3','-c',ready_probe)
+        baseline=len(started())
+        fair=app("""import json,os,sys,urllib.request
+fixture=json.load(sys.stdin)
+def api(path,data,headers=None):
+ h={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['ADMIN_TOKEN']};h.update(headers or {})
+ return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080'+path,data=json.dumps(data).encode(),headers=h)))
+events=[api(fixture['endpoint'],{'message':'Held channel backlog'},{'X-Relay-Key':fixture['token']})['event_id'] for _ in range(8)]
+c=api('/api/channels',{'name':'Healthy fairness fixture','kind':'webhook','config':{'url':'http://mock:8000/fairness087'}})['id']
+r=api('/api/routes',{'name':'Healthy fairness route','channel_ids':[c]})
+healthy=api(r['endpoint'],{'message':'Healthy channel must pass backlog'},{'X-Relay-Key':r['token']})['event_id']
+print(json.dumps({'events':events,'healthy':healthy}))
+""",fixture)
+        alert_ids=[str(uuid.uuid4()) for _ in range(4)]
+        for alert in alert_ids:
+            sql(f"INSERT INTO alert_deliveries(id,channel_id,title,message) VALUES('{alert}','{fixture['channel']}','Capacity fixture','Shared alert capacity')")
+        active=f"SELECT (SELECT COUNT(*) FROM deliveries WHERE channel_id='{fixture['channel']}' AND status='processing')+(SELECT COUNT(*) FROM alert_deliveries WHERE channel_id='{fixture['channel']}' AND status='processing')"
+        wait(lambda:sql(active)=='2')
+        wait(lambda:len(started())-baseline==2)
+        wait(lambda:sql(f"SELECT status FROM deliveries WHERE event_id='{fair['healthy']}'")=='sent',10)
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            assert int(sql(active))<=2
+            assert len(started())-baseline==2
+            time.sleep(.2)
+        (state/'release').touch()
+        event_list=','.join("'"+event+"'" for event in fair['events'])
+        alert_list=','.join("'"+alert+"'" for alert in alert_ids)
+        wait(lambda:sql(f"SELECT COUNT(*) FROM deliveries WHERE event_id IN ({event_list}) AND status='sent' AND attempts=1")=='8')
+        wait(lambda:sql(f"SELECT COUNT(*) FROM alert_deliveries WHERE id IN ({alert_list}) AND status='sent' AND attempts=1")=='4')
+        assert len(started())-baseline==12
+        print('PASS: shared two-attempt channel cap across queues/replicas preserves healthy-channel progress and drains without retries',flush=True)
+        # Two or more independent held proxies share a separate global budget.
+        env['RELAYIX_TEST_PROXY_CONCURRENCY']='2'
+        dc('up','-d','--force-recreate','--wait','--wait-timeout','60','app')
+        dc('up','-d','--force-recreate','replica')
+        dc('exec','-T','replica','python3','-c',ready_probe)
+        (state/'release').unlink()
+        baseline=len(started())
+        proxy_cfg=json.loads(sql(f"SELECT config FROM channels WHERE id='{fixture['channel']}'"))
+        pool_fixture=app("""import json,os,sys,urllib.request
+cfg=json.load(sys.stdin)
+def api(path,data,headers=None):
+ h={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['ADMIN_TOKEN']};h.update(headers or {})
+ return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080'+path,data=json.dumps(data).encode(),headers=h)))
+channels=[];routes=[];events=[]
+for index in range(3):
+ c=api('/api/channels',{'name':'Proxy pool '+str(index),'kind':'telegram','config':cfg})['id'];channels.append(c)
+ r=api('/api/routes',{'name':'Proxy budget '+str(index),'channel_ids':[c]});routes.append(r)
+ events.append(api(r['endpoint'],{'message':'Hold independent proxy'},{'X-Relay-Key':r['token']})['event_id'])
+c=api('/api/channels',{'name':'Proxy pool healthy','kind':'webhook','config':{'url':'http://mock:8000/proxy-pool087'}})['id']
+r=api('/api/routes',{'name':'Proxy pool healthy','channel_ids':[c]})
+healthy=api(r['endpoint'],{'message':'Bypass held proxies'},{'X-Relay-Key':r['token']})['event_id']
+quota=api('/api/routes',{'name':'Replica quota','channel_ids':[],'rate_limit_per_minute':1})
+print(json.dumps({'channels':channels,'events':events,'healthy':healthy,'quota':quota}))
+""",proxy_cfg)
+        channel_list=','.join("'"+channel+"'" for channel in pool_fixture['channels'])
+        global_active=f"SELECT (SELECT COUNT(*) FROM deliveries WHERE channel_id IN ({channel_list}) AND status='processing')+(SELECT COUNT(*) FROM alert_deliveries WHERE channel_id IN ({channel_list}) AND status='processing')"
+        shared_alert=str(uuid.uuid4())
+        sql(f"INSERT INTO alert_deliveries(id,channel_id,title,message) VALUES('{shared_alert}','{pool_fixture['channels'][2]}','Proxy budget alert','Share the same budget')")
+        wait(lambda:sql(global_active)=='2')
+        wait(lambda:len(started())-baseline==2)
+        wait(lambda:sql(f"SELECT status FROM deliveries WHERE event_id='{pool_fixture['healthy']}'")=='sent',10)
+        until=time.monotonic()+5
+        while time.monotonic()<until:
+            assert sql(global_active)=='2'
+            assert len(started())-baseline==2
+            time.sleep(.2)
+        (state/'release').touch()
+        events=','.join("'"+event+"'" for event in pool_fixture['events'])
+        wait(lambda:sql(f"SELECT COUNT(*) FROM deliveries WHERE event_id IN ({events}) AND status='sent' AND attempts=1")=='3')
+        wait(lambda:sql(f"SELECT status FROM alert_deliveries WHERE id='{shared_alert}'")=='sent')
+        quota_probe="""import json,sys,urllib.request,urllib.error
+r=json.load(sys.stdin)
+req=urllib.request.Request('http://127.0.0.1:8080'+r['endpoint'],data=b'{"message":"Replica quota"}',headers={'Content-Type':'application/json','X-Relay-Key':r['token']})
+try:p=urllib.request.urlopen(req)
+except urllib.error.HTTPError as e:p=e
+print(json.dumps(p.status));p.close()
+"""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            statuses=list(executor.map(lambda service:json.loads(run([*compose,'exec','-T',service,'python3','-c',quota_probe],env=env,input=json.dumps(pool_fixture['quota']))),['app','replica']))
+        assert sorted(statuses)==[200,429],statuses
+        long_event=app("""import json,sys,urllib.request
+r=json.load(sys.stdin)
+req=urllib.request.Request('http://127.0.0.1:8080'+r['endpoint'],data=json.dumps({'message':'&😀'*2000}).encode(),headers={'Content-Type':'application/json','X-Relay-Key':r['token']})
+print(json.dumps(json.load(urllib.request.urlopen(req))))
+""",fixture)['event_id']
+        long_id=wait(lambda:sql(f"SELECT id FROM deliveries WHERE event_id='{long_event}' AND status='sent'"))
+        sent=next(item for item in started() if item['id']==long_id)
+        assert len(sent['text'].encode('utf-16-le'))//2<=4096 and sent['text'].endswith('[Message truncated]')
+        assert sent['parse_mode']=='HTML'
+        print('PASS: global proxy capacity across channels/queues/replicas, independent healthy workers, cross-replica route quotas and bounded Telegram HTML',flush=True)
+
+
     except BaseException:
         try:
             artifacts=Path(os.environ.get('RELAYIX_TEST_ARTIFACTS','/tmp/relayix-084-regression-artifacts'))/project

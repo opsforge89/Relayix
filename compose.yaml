@@ -2,7 +2,7 @@ name: relayix
 services:
   app:
     container_name: ${COMPOSE_PROJECT_NAME:-relayix}-app
-    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.8.6}
+    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.8.7}
     restart: unless-stopped
     stop_grace_period: 75s
     networks: [default]
@@ -28,6 +28,8 @@ services:
       TRUSTED_PROXIES: ${TRUSTED_PROXIES-${RELAYIX_NETWORK_GATEWAY:-172.30.84.1}}
       OUTBOUND_ALLOWLIST: ${OUTBOUND_ALLOWLIST:-}
       WEBHOOK_RATE_LIMIT_PER_MINUTE: ${WEBHOOK_RATE_LIMIT_PER_MINUTE:-600}
+      DELIVERY_PROXY_CONCURRENCY: ${DELIVERY_PROXY_CONCURRENCY:-2}
+      DELIVERY_CHANNEL_CONCURRENCY: ${DELIVERY_CHANNEL_CONCURRENCY:-2}
       DELIVERY_WORKERS: ${DELIVERY_WORKERS:-4}
       EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
       RUST_LOG: ${RUST_LOG:-relayix=info}

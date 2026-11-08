@@ -1,6 +1,7 @@
 mod channel_api;
 mod channel_config;
 mod client_ip;
+mod config_transfer;
 mod delivery_api;
 mod lease;
 mod route_api;
@@ -28,6 +29,7 @@ mod telegram;
 mod templates;
 #[cfg(test)]
 mod tests;
+mod webhook_body;
 use anyhow::{anyhow, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
@@ -58,6 +60,8 @@ struct AppState {
     secure_cookies: bool,
     dummy_password_hash: Arc<String>,
     retry_seconds: i32,
+    channel_concurrency: i64,
+    proxy_concurrency: i64,
 }
 type ApiResult<T> = std::result::Result<Json<T>, (StatusCode, Json<Value>)>;
 fn err(code: StatusCode, msg: impl ToString) -> (StatusCode, Json<Value>) {
@@ -201,6 +205,8 @@ async fn main() -> Result<()> {
     let webhook_limit = runtime::setting("WEBHOOK_RATE_LIMIT_PER_MINUTE", 600, 1, 1_000_000)?;
     let policy = network::policy()?;
     let worker_count = runtime::setting("DELIVERY_WORKERS", 4, 1, 32)?;
+    let proxy_concurrency = runtime::setting("DELIVERY_PROXY_CONCURRENCY", 2, 1, 32)?;
+    let channel_concurrency = runtime::setting("DELIVERY_CHANNEL_CONCURRENCY", 2, 1, 32)?;
     let retention_days = runtime::setting("EVENT_RETENTION_DAYS", 30, 0, 3650)?;
     let db = database::connect().await?;
     sqlx::migrate!().run(&db).await.map_err(|_|anyhow!("Database migration failed; check schema permissions, migration history and database server logs"))?;
@@ -219,6 +225,8 @@ async fn main() -> Result<()> {
         allow_http: env::var("ALLOW_INSECURE_HTTP").unwrap_or_default() == "true",
         secure_cookies: env::var("COOKIE_SECURE").unwrap_or_default() == "true",
         dummy_password_hash,
+        channel_concurrency: i64::from(channel_concurrency),
+        proxy_concurrency: i64::from(proxy_concurrency),
         retry_seconds: env::var("RETRY_BASE_SECONDS")
             .ok()
             .and_then(|v| v.parse::<i32>().ok())
@@ -265,6 +273,11 @@ async fn main() -> Result<()> {
         .route("/alert-policies/{id}/test", post(alerts::test))
         .route("/alert-deliveries", get(alerts::history))
         .route("/alert-deliveries/{id}/retry", post(alerts::retry))
+        .route("/config/export", get(config_transfer::export))
+        .route(
+            "/config/import",
+            post(config_transfer::import).layer(DefaultBodyLimit::max(config_transfer::MAX_BYTES)),
+        )
         .route("/channels", get(channels).post(create_channel))
         .route("/channels/diagnose", post(diagnostics::draft))
         .route("/stats", get(stats))

@@ -6,6 +6,8 @@ pub const TITLE_SQL:&str="COALESCE(CASE WHEN jsonb_typeof(COALESCE(e.rendered_pa
 pub struct Rendered {
     pub text: String,
     pub html: bool,
+    pub title: String,
+    pub body: String,
 }
 /// Missing/blank titles never inherit the history's "Notification" fallback.
 pub fn event_title(payload: &Value) -> &str {
@@ -215,7 +217,7 @@ fn formatted(kind: &str, text: &str, bold_title: bool) -> String {
     }
     out
 }
-pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
+fn render_unbounded(kind: &str, title: &str, body: &str) -> Rendered {
     let supported = matches!(kind, "telegram" | "mattermost");
     let title = if title.trim().is_empty() { "" } else { title };
     let rich = supported;
@@ -230,21 +232,207 @@ pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
         body.to_owned()
     };
     let text = if title.is_empty() {
-        body
+        body.clone()
     } else if body.is_empty() {
-        title
+        title.clone()
     } else {
         format!("{title}\n\n{body}")
     };
     Rendered {
         text,
         html: rich && kind == "telegram",
+        title,
+        body,
+    }
+}
+
+fn utf16_len(text: &str) -> usize {
+    text.encode_utf16().count()
+}
+fn prefix(text: &str, units: usize) -> String {
+    let mut used = 0;
+    text.chars()
+        .take_while(|ch| {
+            used += ch.len_utf16();
+            used <= units
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum FieldUnit {
+    Characters,
+    Bytes,
+}
+fn field_cost(text: &str, unit: FieldUnit) -> usize {
+    match unit {
+        FieldUnit::Characters => text.chars().count(),
+        FieldUnit::Bytes => text.len(),
+    }
+}
+fn truncate_field(text: &str, maximum: usize, unit: FieldUnit, suffix: &str) -> String {
+    if field_cost(text, unit) <= maximum {
+        return text.to_owned();
+    }
+    let budget = maximum.saturating_sub(field_cost(suffix, unit));
+    let mut used = 0;
+    let prefix: String = text
+        .chars()
+        .take_while(|ch| {
+            used += match unit {
+                FieldUnit::Characters => 1,
+                FieldUnit::Bytes => ch.len_utf8(),
+            };
+            used <= budget
+        })
+        .collect();
+    format!("{prefix}{suffix}")
+}
+fn provider_fields(kind: &str, title: &str, body: &str) -> (String, String) {
+    let (title_limit, body_limit, unit) = match kind {
+        "pushover" => (250, 1024, FieldUnit::Characters),
+        "ntfy" => (1024, 4096, FieldUnit::Bytes),
+        _ => return (title.to_owned(), body.to_owned()),
+    };
+    (
+        truncate_field(title, title_limit, unit, " [truncated]"),
+        truncate_field(body, body_limit, unit, "\n\n[Message truncated]"),
+    )
+}
+fn google_json_bytes(text: &str) -> usize {
+    json!({"text": text}).to_string().len()
+}
+fn fit_google_source(source: &str, mut render: impl FnMut(&str) -> Rendered) -> Option<Rendered> {
+    let chars: Vec<char> = source.chars().collect();
+    let (mut low, mut high) = (0, chars.len());
+    let mut best = None;
+    while low <= high {
+        let mid = low + (high - low) / 2;
+        let prefix: String = chars[..mid].iter().collect();
+        let candidate = render(&prefix);
+        if google_json_bytes(&candidate.text) <= 32000 {
+            best = Some(candidate);
+            low = mid + 1;
+        } else if mid == 0 {
+            break;
+        } else {
+            high = mid - 1;
+        }
+    }
+    best
+}
+
+/// Truncate source text, then render again: never cut HTML tags or entities.
+pub fn render(kind: &str, _cfg: &Value, title: &str, body: &str) -> Rendered {
+    let (mut title, mut body) = provider_fields(kind, title, body);
+    let full = render_unbounded(kind, &title, &body);
+    if kind == "google_chat" {
+        if google_json_bytes(&full.text) <= 32000 {
+            return full;
+        }
+        return fit_google_source(&body, |prefix| {
+            render_unbounded(kind, &title, &format!("{prefix}\n\n[Message truncated]"))
+        })
+        .or_else(|| {
+            fit_google_source(&title, |prefix| {
+                render_unbounded(kind, prefix, "[Message truncated]")
+            })
+        })
+        .unwrap_or_else(|| render_unbounded(kind, "", "[Message truncated]"));
+    }
+    let limit = match kind {
+        "telegram" => 4096,
+        "discord" => 2000,
+        _ => return full,
+    };
+    if utf16_len(&full.text) <= limit {
+        return full;
+    }
+    loop {
+        let marked = if body.is_empty() {
+            "[Message truncated]".to_owned()
+        } else {
+            format!("{body}\n\n[Message truncated]")
+        };
+        let rendered = render_unbounded(kind, &title, &marked);
+        let length = utf16_len(&rendered.text);
+        if length <= limit {
+            return rendered;
+        }
+        let remove = (length - limit).max(1);
+        if !body.is_empty() {
+            body = prefix(&body, utf16_len(&body).saturating_sub(remove));
+        } else {
+            title = prefix(&title, utf16_len(&title).saturating_sub(remove));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn separate_provider_fields_use_their_documented_units() {
+        let pushover = render(
+            "pushover",
+            &json!({}),
+            &"😀".repeat(251),
+            &"😀".repeat(1500),
+        );
+        assert_eq!(pushover.title.chars().count(), 250);
+        assert_eq!(pushover.body.chars().count(), 1024);
+        assert!(pushover.title.ends_with(" [truncated]"));
+        assert!(pushover.body.ends_with("[Message truncated]"));
+        assert!(pushover.body.len() > 1024);
+        let ntfy = render("ntfy", &json!({}), &"😀".repeat(300), &"😀".repeat(2000));
+        assert!(ntfy.title.len() <= 1024 && ntfy.body.len() <= 4096);
+        assert!(!ntfy.title.contains('\n'));
+        assert!(ntfy.body.ends_with("[Message truncated]"));
+        let exact = "😀".repeat(1024);
+        assert_eq!(render("pushover", &json!({}), "", &exact).body, exact);
+        assert_eq!(render("ntfy", &json!({}), "", &exact).body, exact);
+    }
+    #[test]
+    fn google_chat_limits_the_serialized_json_not_4096_characters() {
+        let plain = "a".repeat(10000);
+        assert_eq!(render("google_chat", &json!({}), "", &plain).text, plain);
+        let escaped = render("google_chat", &json!({}), "Title", &"\0".repeat(10000));
+        assert!(google_json_bytes(&escaped.text) <= 32000);
+        assert!(escaped.text.ends_with("[Message truncated]"));
+        assert!(escaped.text.chars().filter(|c| *c == '\0').count() > 4000);
+    }
+    #[test]
+    fn provider_limits_preserve_unicode_and_valid_markup() {
+        for kind in ["telegram", "discord"] {
+            let raw = format!(
+                "**{}** [link](https://example.org/path)",
+                "<&😀".repeat(3000)
+            );
+            let rendered = render(kind, &json!({}), "Long title", &raw);
+            assert!(utf16_len(&rendered.text) <= if kind == "telegram" { 4096 } else { 2000 });
+            assert!(rendered.text.ends_with("[Message truncated]"));
+            assert_eq!(
+                rendered.text.matches("<b>").count(),
+                rendered.text.matches("</b>").count()
+            );
+            assert_eq!(
+                rendered.text.matches("<a ").count(),
+                rendered.text.matches("</a>").count()
+            );
+            assert!(raw.len() > 10000);
+        }
+        let exact = "a".repeat(2000);
+        assert_eq!(render("discord", &json!({}), "", &exact).text, exact);
+        assert!(!render("smtp", &json!({}), "", &"x".repeat(10000))
+            .text
+            .contains("[Message truncated]"));
+        assert!(
+            render("telegram", &json!({}), &"&".repeat(6000), "")
+                .text
+                .len()
+                <= 4096
+        );
+    }
     #[test]
     fn absent_titles_and_legacy_modes() {
         for payload in [

@@ -451,11 +451,23 @@ async fn schedule(s: &AppState) -> Result<()> {
     Ok(())
 }
 
-async fn send_next(s: &AppState) -> Result<bool> {
+async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
     let mut tx = s.db.begin().await?;
-    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE (status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes') ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+    let channel = match lease::claim_channel(
+        &mut tx,
+        lease::Queue::Alert,
+        s.channel_concurrency,
+        s.proxy_concurrency,
+    )
+    .await?
+    {
+        lease::Claim::Ready(channel) => channel,
+        lease::Claim::Idle => return Ok(lease::Claim::Idle),
+        lease::Claim::Contended => return Ok(lease::Claim::Contended),
+    };
+    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND ((status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     let Some((id, cid, title, message, number)) = row else {
-        return Ok(false);
+        return Ok(lease::Claim::Contended);
     };
     sqlx::query("UPDATE alert_deliveries SET status='processing',locked_at=NOW(),attempts=attempts+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
     tx.commit().await?;
@@ -490,7 +502,7 @@ async fn send_next(s: &AppState) -> Result<bool> {
             sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'queued' END,error=$2,locked_at=NULL,next_attempt_at=NOW()+POWER(2,LEAST(attempts,8))::int*$3::int*INTERVAL '1 second' WHERE id=$1 AND attempts=$4 AND status='processing'").bind(id).bind(error.to_string().chars().take(512).collect::<String>()).bind(s.retry_seconds).bind(number).execute(&s.db).await?;
         }
     }
-    Ok(true)
+    Ok(lease::Claim::Ready(()))
 }
 
 pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
@@ -506,8 +518,11 @@ pub async fn worker(s: AppState, mut stop: tokio::sync::watch::Receiver<bool>) {
             last_schedule = tokio::time::Instant::now();
         }
         match send_next(&s).await {
-            Ok(true) => {}
-            Ok(false) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
+            Ok(lease::Claim::Ready(())) => {}
+            Ok(lease::Claim::Contended) => {
+                runtime::pause(&mut stop, Duration::from_millis(20)).await
+            }
+            Ok(lease::Claim::Idle) => runtime::pause(&mut stop, Duration::from_millis(800)).await,
             Err(error) => {
                 tracing::error!(%error,"failure alert worker");
                 runtime::pause(&mut stop, Duration::from_secs(3)).await;

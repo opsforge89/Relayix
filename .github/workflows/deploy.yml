@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published numeric version, for example 0.8.6
+        description: Published numeric version, for example 0.8.7
         required: true
         type: string
 permissions:
@@ -53,6 +53,8 @@ jobs:
           WEBHOOK_RATE_LIMIT_PER_MINUTE: ${{ vars.RELAYIX_WEBHOOK_RATE_LIMIT_PER_MINUTE }}
           TRUSTED_PROXIES: ${{ vars.RELAYIX_TRUSTED_PROXIES }}
           OUTBOUND_ALLOWLIST: ${{ vars.RELAYIX_OUTBOUND_ALLOWLIST }}
+          DELIVERY_PROXY_CONCURRENCY: ${{ vars.RELAYIX_DELIVERY_PROXY_CONCURRENCY }}
+          DELIVERY_CHANNEL_CONCURRENCY: ${{ vars.RELAYIX_DELIVERY_CHANNEL_CONCURRENCY }}
           DELIVERY_WORKERS: ${{ vars.RELAYIX_DELIVERY_WORKERS }}
           EVENT_RETENTION_DAYS: ${{ vars.RELAYIX_EVENT_RETENTION_DAYS }}
           RUST_LOG: ${{ vars.RELAYIX_RUST_LOG }}

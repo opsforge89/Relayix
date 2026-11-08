@@ -9,7 +9,7 @@ request=json.load(sys.stdin)
 state=Path('/tmp/relayix-telegram-state')
 delivery=request['delivery_id']
 with (state/'started.jsonl').open('a') as stream:
-    stream.write(json.dumps({'id':delivery,'pid':os.getpid()})+'\n')
+    stream.write(json.dumps({'id':delivery,'pid':os.getpid(),'text':request.get('text'),'parse_mode':request.get('parse_mode')})+'\n')
 deadline=time.monotonic()+50
 while not (state/'release').exists() and not (state/(delivery+'.release')).exists():
     (state/(delivery+'.heartbeat')).write_text(str(time.monotonic()))

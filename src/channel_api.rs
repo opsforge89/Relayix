@@ -17,6 +17,37 @@ pub(crate) struct ChannelInput {
     pub(crate) config: Value,
     pub(crate) enabled: Option<bool>,
 }
+pub(crate) fn valid_channel_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err(anyhow!(
+            "Channel name must contain 1–100 characters and no control characters"
+        ));
+    }
+    Ok(())
+}
+pub(crate) fn has_body_template(config: &Value) -> bool {
+    config.get("body_template").is_some_and(|v| !v.is_null())
+}
+pub(crate) fn require_template_editor(
+    role: &str,
+    config: &Value,
+    old: Option<&Value>,
+) -> std::result::Result<(), (StatusCode, Json<Value>)> {
+    if role != "admin" && (has_body_template(config) || old.is_some_and(has_body_template)) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Administrator required to manage channels with a webhook body template",
+        ));
+    }
+    Ok(())
+}
+pub(crate) fn mask_for_role(config: &mut Value, role: &str) {
+    mask(config);
+    if role != "admin" && has_body_template(config) {
+        config["body_template"] = json!("********");
+    }
+}
+
 pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<()> {
     if !cfg.is_object() {
         return Err(anyhow!("Channel config must be an object"));
@@ -36,6 +67,11 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
     proxy::validate(kind, cfg)?;
     if kind == "mattermost" {
         mattermost::validate(cfg)?;
+    }
+    if kind == "webhook" {
+        if let Some(template) = cfg.get("body_template").filter(|v| !v.is_null()) {
+            webhook_body::validate(template)?;
+        }
     }
     if kind == "telegram" {
         telegram_thread(cfg)?;
@@ -66,14 +102,14 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
     Ok(())
 }
 pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<Channel>> {
-    auth::authenticated(&h, &s).await?;
+    let principal = auth::authenticated(&h, &s).await?;
     let mut result =
         sqlx::query_as::<_, Channel>("SELECT * FROM channels ORDER BY created_at DESC")
             .fetch_all(&s.db)
             .await
             .map_err(db_error)?;
     for c in &mut result {
-        mask(&mut c.config);
+        mask_for_role(&mut c.config, &principal.role);
     }
     Ok(Json(result))
 }
@@ -85,7 +121,11 @@ pub(crate) fn mask(config: &mut Value) {
     }
 }
 pub(crate) fn restore_masked(config: &mut Value, old: &Value) {
-    for &key in providers::SECRET_FIELDS {
+    for key in providers::SECRET_FIELDS
+        .iter()
+        .copied()
+        .chain(std::iter::once("body_template"))
+    {
         if config.get(key).and_then(Value::as_str) == Some("********") {
             if let Some(value) = old.get(key) {
                 config[key] = value.clone();
@@ -98,7 +138,9 @@ pub(crate) async fn create_channel(
     h: HeaderMap,
     Json(input): Json<ChannelInput>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let principal = auth::authenticated(&h, &s).await?;
+    valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    require_template_editor(&principal.role, &input.config, None)?;
     valid_config(&input.kind, &input.config, s.allow_http)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     network::validate(&input.config)
@@ -107,7 +149,7 @@ pub(crate) async fn create_channel(
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO channels (id,name,kind,config,enabled) VALUES ($1,$2,$3,$4,$5)")
         .bind(id)
-        .bind(input.name)
+        .bind(input.name.trim())
         .bind(input.kind)
         .bind(input.config)
         .bind(input.enabled.unwrap_or(true))
@@ -122,15 +164,19 @@ pub(crate) async fn update_channel(
     Path(id): Path<Uuid>,
     Json(mut input): Json<ChannelInput>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
-    let old: Option<(Value,)> = sqlx::query_as("SELECT config FROM channels WHERE id=$1")
-        .bind(id)
-        .fetch_optional(&s.db)
-        .await
-        .map_err(db_error)?;
+    let principal = auth::authenticated(&h, &s).await?;
+    valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    let old: Option<(Value,)> =
+        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
     let old = old
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?
         .0;
+    require_template_editor(&principal.role, &input.config, Some(&old))?;
     restore_masked(&mut input.config, &old);
     valid_config(&input.kind, &input.config, s.allow_http)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
@@ -139,13 +185,14 @@ pub(crate) async fn update_channel(
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     sqlx::query("UPDATE channels SET name=$2,kind=$3,config=$4,enabled=$5 WHERE id=$1")
         .bind(id)
-        .bind(input.name)
+        .bind(input.name.trim())
         .bind(input.kind)
         .bind(input.config)
         .bind(input.enabled.unwrap_or(true))
-        .execute(&s.db)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
 pub(crate) async fn delete_channel(
@@ -153,12 +200,23 @@ pub(crate) async fn delete_channel(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let principal = auth::authenticated(&h, &s).await?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    let config: Option<(Value,)> =
+        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    if let Some((config,)) = config {
+        require_template_editor(&principal.role, &config, None)?;
+    }
     sqlx::query("DELETE FROM channels WHERE id=$1")
         .bind(id)
-        .execute(&s.db)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
 
@@ -281,9 +339,9 @@ async fn send_inner(
             }
             client
                 .post(format!("{}/{topic}", url.trim_end_matches('/')))
-                .header("Title", title)
+                .header("Title", rendered.title.as_str())
                 .header("Priority", priority.to_string())
-                .body(message.to_owned())
+                .body(rendered.body)
         }
         Config::Gotify { url, token } => client
             .post(format!("{}/message", url.trim_end_matches('/')))
@@ -294,13 +352,16 @@ async fn send_inner(
             .form(&[
                 ("token", token.as_str()),
                 ("user", user.as_str()),
-                ("title", title),
-                ("message", message),
+                ("title", rendered.title.as_str()),
+                ("message", rendered.body.as_str()),
             ]),
         Config::Discord { url } => client.post(url).json(&json!({"content":text})),
-        Config::Webhook { url } => client
-            .post(url)
-            .json(&json!({"title":title,"message":message,"priority":priority,"source":"relayix"})),
+        Config::Webhook { url } => client.post(url).json(&webhook_body::render(
+            cfg.get("body_template"),
+            title,
+            message,
+            priority,
+        )?),
         Config::Mattermost { url }
         | Config::Slack { url }
         | Config::Teams { url }
@@ -316,4 +377,42 @@ async fn send_inner(
         return Err(anyhow!("Remote server returned {status}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    #[test]
+    fn body_templates_are_admin_only_and_cannot_be_retargeted_by_members() {
+        let stored = json!({"url":"https://example.org/private", "body_template":{"api_key":"private","text":"{{message}}"}});
+        let mut member = stored.clone();
+        mask_for_role(&mut member, "member");
+        assert_eq!(member["body_template"], "********");
+        assert_eq!(member["url"], "********");
+        let mut admin = stored.clone();
+        mask_for_role(&mut admin, "admin");
+        assert_eq!(admin["body_template"], stored["body_template"]);
+        assert_eq!(admin["url"], "********");
+        assert!(require_template_editor(
+            "member",
+            &json!({"url":"https://other.example"}),
+            Some(&stored)
+        )
+        .is_err());
+        assert!(require_template_editor("member", &stored, None).is_err());
+        assert!(require_template_editor("admin", &member, Some(&stored)).is_ok());
+        restore_masked(&mut member, &stored);
+        assert_eq!(member, stored);
+        assert!(
+            require_template_editor("member", &json!({"url":"https://example.org"}), None).is_ok()
+        );
+    }
+    #[test]
+    fn channel_names_are_validated_as_unicode_on_all_write_paths() {
+        for name in ["", "  ", "line\nbreak", &"a".repeat(101)] {
+            assert!(valid_channel_name(name).is_err());
+        }
+        assert!(valid_channel_name(&"😀".repeat(100)).is_ok());
+        assert!(valid_channel_name("  Notifications  ").is_ok());
+    }
 }

@@ -2,6 +2,7 @@ name: Release Docker image
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '*.md']
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,6 +36,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           REPOSITORY: ${{ github.repository }}
+          CANDIDATE_VERSION: ${{ needs.verify.outputs.version }}
+          CANDIDATE_IMAGE_REF: ${{ needs.verify.outputs.image_ref }}
         run: |
           python3 scripts/check_release.py
           printf 'revision=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -44,6 +47,9 @@ jobs:
           version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
           assert re.fullmatch(r'\d+\.\d+\.\d+', version), 'Release requires a numeric semantic version'
           assert json.loads(Path('web/package.json').read_text())['version'] == version, 'Web version differs'
+          assert os.environ['CANDIDATE_VERSION'] == version, 'Candidate version differs'
+          expected = 'ghcr.io/' + os.environ['REPOSITORY'].lower() + '@sha256:'
+          assert re.fullmatch(re.escape(expected) + '[0-9a-f]{64}', os.environ['CANDIDATE_IMAGE_REF']), 'Invalid candidate reference'
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('image=ghcr.io/' + os.environ['REPOSITORY'].lower() + '\n')
               output.write('version=' + version + '\n')
@@ -72,25 +78,30 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish production image after all tests
+      - uses: actions/download-artifact@v7
         if: steps.release.outputs.publish == 'true'
-        uses: docker/build-push-action@v7
         with:
-          context: .
-          target: production
-          pull: true
-          push: true
-          tags: |
-            ${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}
-            ${{ steps.release.outputs.image }}:beta
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
-            org.opencontainers.image.version=${{ steps.release.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+          name: production-candidate-${{ github.sha }}
+          path: /tmp/relayix-promote
+      - name: Install OCI archive transport
+        if: steps.release.outputs.publish == 'true'
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Promote the tested digest without rebuilding
+        if: steps.release.outputs.publish == 'true'
+        env:
+          IMAGE_REF: ${{ needs.verify.outputs.image_ref }}
+          IMAGE: ${{ needs.verify.outputs.image }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          REVISION: ${{ github.sha }}
+        run: |
+          skopeo copy --all --preserve-digests --dest-authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json" \
+            --digestfile /tmp/relayix-promoted-digest \
+            oci-archive:/tmp/relayix-promote/relayix-candidate.tar:candidate "docker://$IMAGE:sha-$REVISION"
+          expected="${IMAGE_REF##*@}"
+          actual=$(cat /tmp/relayix-promoted-digest)
+          [[ "$actual" == "$expected" ]]
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$IMAGE:$VERSION" --tag "$IMAGE:beta" "$IMAGE_REF"
       - name: Publish standalone Compose downloads
         if: steps.release.outputs.publish == 'true'
         env:
