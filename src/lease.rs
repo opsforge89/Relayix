@@ -26,11 +26,18 @@ pub async fn claim_channel(
         Queue::Alert => "alert_deliveries",
     };
     let active = "(SELECT COUNT(*) FROM deliveries d WHERE d.channel_id=c.id AND d.status='processing' AND d.locked_at>=NOW()-INTERVAL '2 minutes') + (SELECT COUNT(*) FROM alert_deliveries a WHERE a.channel_id=c.id AND a.status='processing' AND a.locked_at>=NOW()-INTERVAL '2 minutes')";
-    let candidate = format!(
-        "SELECT c.id FROM channels c JOIN LATERAL (SELECT MIN(d.created_at) AS oldest FROM {table} d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE {active} < $1 ORDER BY ready.oldest,c.id FOR UPDATE OF c SKIP LOCKED LIMIT 1"
+    let mut candidate = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT c.id FROM channels c JOIN LATERAL (SELECT MIN(d.created_at) AS oldest FROM ",
     );
-    let channel: Option<Uuid> = sqlx::query_scalar(&candidate)
-        .bind(limit)
+    candidate
+        .push(table)
+        .push(" d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE ")
+        .push(active)
+        .push(" < ")
+        .push_bind(limit)
+        .push(" ORDER BY ready.oldest,c.id FOR UPDATE OF c SKIP LOCKED LIMIT 1");
+    let channel: Option<Uuid> = candidate
+        .build_query_scalar()
         .fetch_optional(&mut **tx)
         .await?;
     let Some(channel) = channel else {
@@ -38,13 +45,17 @@ pub async fn claim_channel(
     };
     // A claim may commit between the candidate statement's snapshot and its
     // channel lock. Recount in a fresh statement while holding that lock.
-    let capacity: bool = sqlx::query_scalar(&format!(
-        "SELECT ({active}) < $2 FROM channels c WHERE c.id=$1"
-    ))
-    .bind(channel)
-    .bind(limit)
-    .fetch_one(&mut **tx)
-    .await?;
+    let mut capacity = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT (");
+    capacity
+        .push(active)
+        .push(") < ")
+        .push_bind(limit)
+        .push(" FROM channels c WHERE c.id=")
+        .push_bind(channel);
+    let capacity: bool = capacity
+        .build_query_scalar()
+        .fetch_one(&mut **tx)
+        .await?;
     Ok(capacity.then_some(channel))
 }
 
