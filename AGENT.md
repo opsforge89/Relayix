@@ -1,29 +1,35 @@
-# Правила работы с Relayix
+# Relayix Agent Instructions
 
-## Локальная работа
+Maintain this file in English.
 
-- Локально только редактировать файлы и готовить Git-изменения.
-- Не запускать локально тесты, сборки приложения/образов, аудит зависимостей, сканеры или интеграционные окружения. Все проверки выполняются только в GitHub Actions.
-- Не делать дополнительных проверок и скачиваний образа после публикации без отдельного поручения пользователя.
+## Local Work
 
-## Единственный пайплайн выпуска
+- Edit files and prepare Git changes locally.
+- Run all tests and validation only in GitHub Actions. Do not run local tests, application or image builds, dependency audits, security scanners, or integration environments.
+- Do not add post-publication checks or download published images unless the user explicitly requests them.
 
-1. Подготовить PR: код, версия Cargo, сгенерированные манифесты, changelog и документация должны соответствовать итоговым изменениям.
-2. По поручению пользователя слить PR в `main`.
-3. Пуш в `main` запускает один workflow выпуска: все тесты и сканирования выполняются один раз в GitHub.
-4. Только после успешных проверок создать тег `v<version>` на проверенном commit SHA.
-5. Собрать релизный образ без повторного запуска тестов и опубликовать версионный образ и `:beta`.
-6. Опубликовать GitHub Beta release, описание изменений и файлы `compose.yaml` / `relayix.env.example`. Документация входит в тот же проверенный коммит.
+## Release Workflow
 
-Пуш PR или тега не должен запускать ещё один тестовый workflow. `check.yml` вызывается только из `release.yml`; задание публикации обязательно зависит от успешного `verify`. Отдельный тестовый образ `verified` нужен для интеграционных тестов, но не публикуется. Релизный target `production` не зависит от тестовых стадий Dockerfile.
+Follow this sequence:
 
-При ошибке проверок публикация останавливается. Не обходить барьер `needs: verify`. Уже созданные теги не перемещать; для другого коммита повысить версию. Повтор после ошибки выполнять через GitHub Actions на исходном коммите, без параллельных дублирующих запусков.
+1. Prepare a PR with the code, Cargo version, synchronized release manifests, changelog, and documentation.
+2. Merge the PR into `main` when the user has authorized publication.
+3. The push to `main` starts one GitHub workflow that runs the complete test and scan suite once.
+4. Only after all checks succeed, create `v<version>` on the exact commit that was tested.
+5. Build the production image without rerunning tests, then publish the versioned image and `:beta`.
+6. Publish the GitHub Beta release, release notes, `compose.yaml`, and `relayix.env.example`. Documentation must belong to the same tested commit.
 
-Проверки перед слиянием PR не требуются: они выполняются после пуша в `main`, перед публикацией. Остальные настройки защиты `main` сохранять.
+PR pushes and tag pushes must not start additional verification workflows. `check.yml` is called only by `release.yml`. Publishing must depend on a successful `verify` job through `needs: verify`.
 
-## Данные и секреты
+Integration tests require an isolated `verified` image; never publish that image. The `production` Docker target must not depend on the Rust or frontend check stages. Test stages run before the production image build, not during it.
 
-- Не менять существующие пароли, токены маршрутов, имена томов и рабочую конфигурацию вне задачи.
-- Не удалять тома БД при обновлении или пересоздании сети. Для сохранения данных использовать `down` без `--volumes`.
-- Не редактировать применённые SQL-миграции; изменения схемы оформлять новой миграцией.
-- Приватные настройки, секреты, дампы, резервные копии и тестовые credentials держать вне Git. Не выводить секреты в команды, сообщения, PR и логи.
+If any check fails, stop publication. Never bypass the verification dependency. Never move an existing tag to another commit: increment the version instead. Retry failed runs in GitHub Actions against the original commit, without starting parallel duplicate runs.
+
+Do not require a verification status before merging a PR: tests run after the push to `main` and before publication. Preserve the other branch protection settings.
+
+## Data and Secrets
+
+- Preserve existing passwords, route tokens, volume names, and private deployment settings unless the task explicitly requires changing them.
+- Never delete database volumes when upgrading or recreating networks. Use `down` without `--volumes` to preserve data.
+- Do not edit applied SQL migrations. Add a new migration for schema changes.
+- Keep private settings, secrets, database dumps, backups, and generated test credentials outside Git. Never expose secrets in commands, messages, pull requests, or logs.
