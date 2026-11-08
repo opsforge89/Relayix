@@ -20,7 +20,7 @@ In repository settings enable Actions and Packages. Protect `main` against force
 
 ## Continuous integration
 
-`Verify` is a reusable workflow called only by `Release Docker image`. It does not run automatically on PRs or pushes to `main`, and has no standalone manual trigger. Each release runs the full suite once, then builds/publishes the production image only when `verify` succeeds.
+`Verify` is a reusable workflow called only by `Release Docker image`. It does not run automatically on PRs or pushes to `main`, and has no standalone manual trigger. A push to `main` starts one pipeline: run the full suite once, create the version tag, then build/publish the production image only when `verify` succeeds. PRs and tag pushes do not start another run.
 
 The verification job builds the Docker `verified` target, which enforces Rust formatting, Clippy, `cargo test --locked --release`, frontend ESLint and unit tests. It audits Cargo dependencies, scans the runtime image for fixable HIGH/CRITICAL vulnerabilities, and runs `scripts/check.sh --skip-app-build` for API, queue, SMTP and Chromium tests using temporary PostgreSQL and local mocks. The verification image is needed for these integration tests and is never published. Test resources are cleaned up even on failure; screenshots and failure logs are retained for seven days.
 
@@ -28,16 +28,16 @@ The production Docker target shares application/runtime stages with the verifica
 
 ## Continuous delivery
 
-When a version is ready for pre-publication testing:
+Merge a release PR into `main` with the version in `Cargo.toml`, generated manifests and changelog already updated. The `Release Docker image` workflow runs automatically for that exact merge commit:
 
-```bash
-git tag v0.8.6
-git push origin v0.8.6
-```
+1. Run all tests/scans once on GitHub, using the isolated verification runtime.
+2. After success, create the annotated `v<version>` tag on that same commit.
+3. Build the `production` target without rerunning tests and publish `ghcr.io/opsforge89/relayix:<version>` and `:beta`.
+4. Create the GitHub Beta release and attach the standalone Compose/environment files; documentation is versioned in the same tagged commit.
 
-`Release Docker image` runs the complete CI once before the production build, checks that the tag agrees with both Cargo and npm versions, and publishes `ghcr.io/opsforge89/relayix:0.8.6` and `:beta`. It uses the repository-scoped `GITHUB_TOKEN` with `packages:write`; no personal token is required for publication. It includes source/revision labels, build provenance and an SBOM. Release tags also publish the single standalone Compose file and blank environment template as GitHub Release downloads. Tags are beta releases; the pipeline deliberately does not label them `latest`.
+The tag push does not trigger another workflow. An existing tag at a different commit is never moved: the workflow completes verification but skips publication until the Cargo version is advanced. A manual dispatch on `main` can retry a failed run at the same commit; use GitHub's rerun action on the original run if `main` has advanced.
 
-`Release Docker image` can also be dispatched manually with an existing numeric version, such as `0.8.6`. Both verification and publishing check out that exact version tag, and the image revision label records the tagged commit. This supports retrying first-publication tag events without moving a release tag.
+Publishing uses the repository-scoped `GITHUB_TOKEN` with `packages:write` and `contents:write`; no personal token is required. Images include source/revision labels, provenance and an SBOM. Tags are Beta releases; the pipeline does not publish `latest`.
 
 Container package visibility is controlled in GitHub Packages. For anonymous pulls set the package public. For private pulls authenticate on the deployment host with a token allowed to read that package; do not commit the credential.
 
