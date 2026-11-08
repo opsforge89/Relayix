@@ -59,9 +59,15 @@ impl TrustedProxies {
                 }
                 _ => (address, prefix),
             };
+            if prefix == 0 {
+                return Err(anyhow!("TRUSTED_PROXIES must not trust all addresses (/0)"));
+            }
             networks.push((address, prefix));
         }
         Ok(Self { networks })
+    }
+    pub fn is_empty(&self) -> bool {
+        self.networks.is_empty()
     }
     fn contains(&self, address: IpAddr) -> bool {
         let address = canonical(address);
@@ -231,6 +237,10 @@ mod tests {
             .is_err());
         for raw in [
             "localhost",
+            "0.0.0.0/0",
+            "192.0.2.1/0",
+            "::/0",
+            "::ffff:0.0.0.0/96",
             "127.0.0.1/33",
             "::1/129",
             "::ffff:127.0.0.1/64",

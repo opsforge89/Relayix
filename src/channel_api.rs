@@ -219,6 +219,12 @@ pub(crate) async fn send(
     allow_http: bool,
     delivery_id: Uuid,
 ) -> Result<()> {
+    if c.kind == "telegram" && matches!(proxy::mode(&c.config), "mtproto" | "webproxy") {
+        valid_config(&c.kind, &c.config, allow_http)?;
+        let rendered = message::render(&c.kind, &c.config, title, message);
+        // Telegram owns its deadline: capacity waits must not consume a transport attempt.
+        return telegram::send(&c.config, &rendered.text, delivery_id, rendered.html).await;
+    }
     tokio::time::timeout(
         Duration::from_secs(60),
         send_inner(client, c, title, message, priority, allow_http, delivery_id),
@@ -241,9 +247,6 @@ async fn send_inner(
     network::validate(cfg).await?;
     let rendered = message::render(&c.kind, cfg, title, message);
     let text = rendered.text;
-    if c.kind == "telegram" && matches!(proxy::mode(cfg), "mtproto" | "webproxy") {
-        return telegram::send(cfg, &text, delivery_id, rendered.html).await;
-    }
     let client = proxy::client(client, cfg)?;
     if c.kind == "mattermost" && mattermost::is_bot(cfg) {
         return mattermost::send(&client, cfg, &text).await;

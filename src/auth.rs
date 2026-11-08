@@ -93,7 +93,13 @@ async fn verify(password: String, encoded: String) -> bool {
     let Ok(permit) = PASSWORD_WORK.acquire().await else {
         return false;
     };
-    let verified = tokio::task::spawn_blocking(move || {
+    let verified = verify_password(password, encoded).await;
+    drop(permit);
+    verified
+}
+
+async fn verify_password(password: String, encoded: String) -> bool {
+    tokio::task::spawn_blocking(move || {
         PasswordHash::new(&encoded)
             .map(|hash| {
                 Argon2::default()
@@ -103,9 +109,7 @@ async fn verify(password: String, encoded: String) -> bool {
             .unwrap_or(false)
     })
     .await
-    .unwrap_or(false);
-    drop(permit);
-    verified
+    .unwrap_or(false)
 }
 
 fn session_token(h: &HeaderMap) -> Option<&str> {
@@ -211,10 +215,19 @@ pub async fn login(
         return Err(unauthorized());
     }
     let attempt_key = hash(&format!("{}:{username}", client.key()));
+    let account_key = hash(&format!("account:{username}"));
     sqlx::query("DELETE FROM login_attempts WHERE window_started_at<NOW()-INTERVAL '15 minutes'")
         .execute(&s.db)
         .await
         .map_err(db_error)?;
+    // Check failure budgets after joining the bounded password-work queue. A
+    // distributed burst must not pre-admit unlimited checks before failures land.
+    let password_permit = PASSWORD_WORK.acquire().await.map_err(|_| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Password verification unavailable",
+        )
+    })?;
     let failures: Option<(i32,)> =
         sqlx::query_as("SELECT failures FROM login_attempts WHERE username=$1")
             .bind(&attempt_key)
@@ -225,6 +238,19 @@ pub async fn login(
         return Err(err(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many login attempts. Try again in 15 minutes",
+        ));
+    }
+    // After 30 distributed failures, admit at most one password verification every
+    // two seconds. Rejections do not extend the gate or the 15-minute failure window.
+    // Atomic UPDATE also coordinates competing processes; correct passwords may
+    // still succeed in the next short slot rather than being locked out for 15 minutes.
+    let admitted: bool = sqlx::query_scalar(
+        "WITH admitted AS (UPDATE login_attempts SET next_allowed_at=NOW()+INTERVAL '2 seconds' WHERE username=$1 AND failures>=30 AND next_allowed_at<=NOW() RETURNING 1) SELECT EXISTS(SELECT 1 FROM admitted) OR NOT EXISTS(SELECT 1 FROM login_attempts WHERE username=$1 AND failures>=30)"
+    ).bind(&account_key).fetch_one(&s.db).await.map_err(db_error)?;
+    if !admitted {
+        return Err(err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Login temporarily slowed; retry in 2 seconds",
         ));
     }
     let row: Option<(Uuid, String, bool)> =
@@ -238,21 +264,24 @@ pub async fn login(
         Some((_, encoded, _)) => encoded.clone(),
         None => s.dummy_password_hash.as_ref().clone(),
     };
-    let valid = verify(input.password, encoded).await && row.as_ref().map(|r| r.2).unwrap_or(false);
+    let valid = verify_password(input.password, encoded).await
+        && row.as_ref().map(|r| r.2).unwrap_or(false);
     if !valid {
-        sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
-            .bind(&attempt_key).execute(&s.db).await.map_err(db_error)?;
+        sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
+            .bind(&attempt_key).bind(&account_key).execute(&s.db).await.map_err(db_error)?;
         return Err(err(
             StatusCode::UNAUTHORIZED,
             "Invalid username or password",
         ));
     }
     let id = row.unwrap().0;
-    sqlx::query("DELETE FROM login_attempts WHERE username=$1")
+    sqlx::query("DELETE FROM login_attempts WHERE username=$1 OR username=$2")
         .bind(&attempt_key)
+        .bind(&account_key)
         .execute(&s.db)
         .await
         .map_err(db_error)?;
+    drop(password_permit);
     sqlx::query("DELETE FROM sessions WHERE expires_at<NOW()")
         .execute(&s.db)
         .await

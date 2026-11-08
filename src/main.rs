@@ -195,6 +195,10 @@ async fn main() -> Result<()> {
     let trusted_proxies = Arc::new(client_ip::TrustedProxies::parse(
         &env::var("TRUSTED_PROXIES").unwrap_or_default(),
     )?);
+    if trusted_proxies.is_empty() {
+        tracing::warn!("TRUSTED_PROXIES is empty: forwarding headers are ignored; clients behind a reverse proxy share request quotas and IP/username login lockouts");
+    }
+    let webhook_limit = runtime::setting("WEBHOOK_RATE_LIMIT_PER_MINUTE", 600, 1, 1_000_000)?;
     let policy = network::policy()?;
     let worker_count = runtime::setting("DELIVERY_WORKERS", 4, 1, 32)?;
     let retention_days = runtime::setting("EVENT_RETENTION_DAYS", 30, 0, 3650)?;
@@ -311,7 +315,10 @@ async fn main() -> Result<()> {
             ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html")),
         )
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(axum::middleware::from_fn(runtime::rate_limit))
+        .layer(axum::middleware::from_fn_with_state(
+            webhook_limit,
+            runtime::rate_limit,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             trusted_proxies,
             client_ip::resolve,

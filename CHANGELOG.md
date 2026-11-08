@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.5 Beta — 2026-11-08
+
+- Fix the standalone Compose bridge subnet/gateway, trust only that gateway by default, permit explicit network/proxy overrides, and warn when the application has no trusted proxies. Existing installations must recreate the bridge without removing volumes and remove stale/empty proxy assignments to adopt the default.
+- Reject all-address trusted-proxy networks, including IPv4-mapped equivalents.
+- Start Telegram MTProto/WEB transport deadlines after acquiring a subprocess slot; keep renewing delivery/alert leases during capacity waits.
+- Make the per-client webhook quota configurable with `WEBHOOK_RATE_LIMIT_PER_MINUTE` (default 600).
+- Add a PostgreSQL-coordinated soft account throttle across client IPs: after 30 failures in 15 minutes, allow one verification every two seconds without extending the gate for rejected requests. Successful login clears the account counter. Add one compatible migration column.
+
 ## 0.8.4 Beta — 2026-11-08
 
 - Add explicit CIDR-based `TRUSTED_PROXIES` and select client addresses from trusted X-Forwarded-For chains for both request quotas and failed-login windows. Ignore forwarded headers from untrusted peers.

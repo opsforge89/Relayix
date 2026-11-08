@@ -11,7 +11,7 @@ delivery=request['delivery_id']
 with (state/'started.jsonl').open('a') as stream:
     stream.write(json.dumps({'id':delivery,'pid':os.getpid()})+'\n')
 deadline=time.monotonic()+50
-while not (state/'release').exists():
+while not (state/'release').exists() and not (state/(delivery+'.release')).exists():
     (state/(delivery+'.heartbeat')).write_text(str(time.monotonic()))
     if time.monotonic()>deadline:raise SystemExit(1)
     time.sleep(.1)

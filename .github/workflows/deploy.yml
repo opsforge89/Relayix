@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published numeric version, for example 0.8.4
+        description: Published numeric version, for example 0.8.5
         required: true
         type: string
 permissions:
@@ -48,6 +48,9 @@ jobs:
           POSTGRES_IMAGE: ${{ vars.RELAYIX_POSTGRES_IMAGE }}
           POSTGRES_CLIENT_IMAGE: ${{ vars.RELAYIX_POSTGRES_CLIENT_IMAGE }}
           ALLOW_INSECURE_HTTP: ${{ vars.RELAYIX_ALLOW_INSECURE_HTTP }}
+          RELAYIX_NETWORK_SUBNET: ${{ vars.RELAYIX_NETWORK_SUBNET }}
+          RELAYIX_NETWORK_GATEWAY: ${{ vars.RELAYIX_NETWORK_GATEWAY }}
+          WEBHOOK_RATE_LIMIT_PER_MINUTE: ${{ vars.RELAYIX_WEBHOOK_RATE_LIMIT_PER_MINUTE }}
           TRUSTED_PROXIES: ${{ vars.RELAYIX_TRUSTED_PROXIES }}
           OUTBOUND_ALLOWLIST: ${{ vars.RELAYIX_OUTBOUND_ALLOWLIST }}
           DELIVERY_WORKERS: ${{ vars.RELAYIX_DELIVERY_WORKERS }}

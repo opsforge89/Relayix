@@ -36,7 +36,7 @@ struct Limiter {
     entries: HashMap<(IpAddr, bool), (Instant, u32)>,
 }
 impl Limiter {
-    fn allow(&mut self, ip: IpAddr, login: bool, now: Instant) -> bool {
+    fn allow(&mut self, ip: IpAddr, login: bool, now: Instant, webhook_limit: u32) -> bool {
         let ip = client_ip::ClientIp(ip).key();
         // Fixed windows bound both request work and limiter memory. Never evict active quotas.
         if self.entries.len() >= 10000 {
@@ -51,7 +51,7 @@ impl Limiter {
             *start = now;
             *count = 0;
         }
-        let limit = if login { 60 } else { 600 };
+        let limit = if login { 60 } else { webhook_limit };
         if *count >= limit {
             return false;
         }
@@ -59,7 +59,11 @@ impl Limiter {
         true
     }
 }
-pub async fn rate_limit(request: Request, next: Next) -> Response {
+pub async fn rate_limit(
+    State(webhook_limit): State<u32>,
+    request: Request,
+    next: Next,
+) -> Response {
     let path = request.uri().path();
     if path == "/api/auth/login" || path.starts_with("/h/") {
         static LIMITS: OnceLock<Mutex<Limiter>> = OnceLock::new();
@@ -73,7 +77,14 @@ pub async fn rate_limit(request: Request, next: Next) -> Response {
         let allowed = LIMITS
             .get_or_init(|| Mutex::new(Limiter::default()))
             .lock()
-            .map(|mut l| l.allow(client.key(), path == "/api/auth/login", Instant::now()))
+            .map(|mut l| {
+                l.allow(
+                    client.key(),
+                    path == "/api/auth/login",
+                    Instant::now(),
+                    webhook_limit,
+                )
+            })
             .unwrap_or(false);
         if !allowed {
             let mut response = err(
@@ -139,15 +150,27 @@ mod tests {
             let address = IpAddr::V6(std::net::Ipv6Addr::from(
                 (0x20010db800010002u128 << 64) | suffix,
             ));
-            assert_eq!(limiter.allow(address, true, now), suffix <= 60);
+            assert_eq!(limiter.allow(address, true, now, 600), suffix <= 60);
         }
         assert_eq!(limiter.entries.len(), 1);
-        assert!(limiter.allow("2001:db8:1:3::1".parse().unwrap(), true, now));
-        assert!(limiter.allow("192.0.2.1".parse().unwrap(), true, now));
+        assert!(limiter.allow("2001:db8:1:3::1".parse().unwrap(), true, now, 600));
+        assert!(limiter.allow("192.0.2.1".parse().unwrap(), true, now, 600));
         for _ in 1..60 {
-            assert!(limiter.allow("::ffff:192.0.2.1".parse().unwrap(), true, now));
+            assert!(limiter.allow("::ffff:192.0.2.1".parse().unwrap(), true, now, 600));
         }
-        assert!(!limiter.allow("192.0.2.1".parse().unwrap(), true, now));
+        assert!(!limiter.allow("192.0.2.1".parse().unwrap(), true, now, 600));
+    }
+    #[test]
+    fn webhook_bursts_use_the_configured_limit() {
+        let mut limiter = Limiter::default();
+        let now = Instant::now();
+        let client = "192.0.2.5".parse().unwrap();
+        for _ in 0..1200 {
+            assert!(limiter.allow(client, false, now, 1200));
+        }
+        assert!(!limiter.allow(client, false, now, 1200));
+        assert!(limiter.allow(client, true, now, 1200));
+        assert!(limiter.allow(client, false, now + Duration::from_secs(60), 1200));
     }
     #[test]
     fn request_limits_isolate_clients_and_expire() {
@@ -156,15 +179,15 @@ mod tests {
         let a = "192.0.2.1".parse().unwrap();
         let b = "192.0.2.2".parse().unwrap();
         for _ in 0..60 {
-            assert!(limiter.allow(a, true, now));
+            assert!(limiter.allow(a, true, now, 600));
         }
-        assert!(!limiter.allow(a, true, now));
-        assert!(limiter.allow(b, true, now));
-        assert!(limiter.allow(a, false, now));
-        assert!(limiter.allow(a, true, now + Duration::from_secs(60)));
+        assert!(!limiter.allow(a, true, now, 600));
+        assert!(limiter.allow(b, true, now, 600));
+        assert!(limiter.allow(a, false, now, 600));
+        assert!(limiter.allow(a, true, now + Duration::from_secs(60), 600));
         for _ in 1..600 {
-            assert!(limiter.allow(a, false, now));
+            assert!(limiter.allow(a, false, now, 600));
         }
-        assert!(!limiter.allow(a, false, now));
+        assert!(!limiter.allow(a, false, now, 600));
     }
 }

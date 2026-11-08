@@ -28,8 +28,8 @@ defaults = json.loads((ROOT / 'config/deployment.example.json').read_text())
 variables = {}
 for key in ('DATABASE_MODE', 'ADMIN_USERNAME', 'BIND_ADDRESS', 'PORT', 'COOKIE_SECURE',
             'POSTGRES_IMAGE', 'POSTGRES_CLIENT_IMAGE', 'ALLOW_INSECURE_HTTP', 'RUST_LOG',
-            'TRUSTED_PROXIES', 'OUTBOUND_ALLOWLIST', 'DELIVERY_WORKERS', 'EVENT_RETENTION_DAYS'):
-    variables['RELAYIX_' + key] = config.get(key, defaults[key])
+            'TRUSTED_PROXIES', 'RELAYIX_NETWORK_SUBNET', 'RELAYIX_NETWORK_GATEWAY', 'WEBHOOK_RATE_LIMIT_PER_MINUTE', 'OUTBOUND_ALLOWLIST', 'DELIVERY_WORKERS', 'EVENT_RETENTION_DAYS'):
+    variables[key if key.startswith('RELAYIX_') else 'RELAYIX_' + key] = config.get(key, defaults.get(key, ''))
 for key, field in (('POSTGRES_HOST', 'host'), ('POSTGRES_PORT', 'port'),
                    ('POSTGRES_USER', 'user'), ('POSTGRES_DB', 'database'),
                    ('POSTGRES_SSLMODE', 'sslmode')):

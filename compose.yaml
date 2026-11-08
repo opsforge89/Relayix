@@ -2,7 +2,7 @@ name: relayix
 services:
   app:
     container_name: ${COMPOSE_PROJECT_NAME:-relayix}-app
-    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.8.4}
+    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.8.5}
     restart: unless-stopped
     stop_grace_period: 75s
     networks: [default]
@@ -25,8 +25,9 @@ services:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       ALLOW_INSECURE_HTTP: ${ALLOW_INSECURE_HTTP:-false}
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES-${RELAYIX_NETWORK_GATEWAY:-172.30.84.1}}
       OUTBOUND_ALLOWLIST: ${OUTBOUND_ALLOWLIST:-}
+      WEBHOOK_RATE_LIMIT_PER_MINUTE: ${WEBHOOK_RATE_LIMIT_PER_MINUTE:-600}
       DELIVERY_WORKERS: ${DELIVERY_WORKERS:-4}
       EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
       RUST_LOG: ${RUST_LOG:-relayix=info}
@@ -65,3 +66,7 @@ volumes:
 networks:
   default:
     name: ${COMPOSE_PROJECT_NAME:-relayix}-network
+    ipam:
+      config:
+        - subnet: ${RELAYIX_NETWORK_SUBNET:-172.30.84.0/24}
+          gateway: ${RELAYIX_NETWORK_GATEWAY:-172.30.84.1}
