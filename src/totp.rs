@@ -283,7 +283,12 @@ pub async fn disable(
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let proof = consume_in(&mut tx, id, input.code.trim())
         .await
-        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Unable to verify authenticator"))?;
+        .map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unable to verify authenticator",
+            )
+        })?;
     if !proof.0 || proof.1.is_none() {
         tx.commit().await.map_err(db_error)?;
         return Err(err(
