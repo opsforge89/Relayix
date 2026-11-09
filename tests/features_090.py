@@ -74,7 +74,7 @@ try:
     saved=next(c for c in ok('/api/channels') if c['id']==channel)
     ok('/api/channels/'+channel,saved,'PUT')
     assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
-    ok('/api/channels/'+channel+'/resume',{},'POST')
+    ok('/api/channels/'+channel+'/resume',method='POST')
     wait(lambda:rows(r)[0]['status']=='sent')
     wait(lambda:sql(f"SELECT status FROM alert_deliveries WHERE policy_id='{policy}'")=='sent')
     future=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=4)).isoformat()
@@ -159,7 +159,8 @@ try:
     prepared=ok('/api/auth/totp/setup',{'password':credentials['operator_password']},headers=account)
     assert 'otpauth://totp/' in prepared['uri'] and prepared['secret']
     assert not ok('/api/auth/totp',headers=account)['enabled']
-    enabled=ok('/api/auth/totp/enable',{'code':otp(prepared['secret'])},headers=account)
+    enrolled_code=otp(prepared['secret'])
+    enabled=ok('/api/auth/totp/enable',{'code':enrolled_code},headers=account)
     backups=enabled['recovery_codes'];assert len(backups)==10 and len(set(backups))==10
     assert request('/api/auth/me',headers=old_session)[0]==401
     assert ok('/api/auth/totp',headers=account)['enabled']
@@ -178,7 +179,7 @@ try:
     sql(f"INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('{hashlib.sha256(late.encode()).hexdigest()}','{user}',NOW()+INTERVAL '1 day')")
     assert request('/api/auth/me',headers={'Authorization':'','Cookie':'relayix-session='+late})[0]==401
     assert session(username,credentials['operator_password'])[0]==401
-    assert session(username,credentials['operator_password'],otp(prepared['secret']))[0]==401
+    assert session(username,credentials['operator_password'],enrolled_code)[0]==401
     current_code=otp(prepared['secret'],1)
     assert session(username,credentials['operator_password'],current_code)[0]==200
     assert session(username,credentials['operator_password'],current_code)[0]==401
