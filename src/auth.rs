@@ -156,7 +156,7 @@ pub async fn authenticated(
         return Err(unauthorized());
     }
     let token = session_token(h).ok_or_else(unauthorized)?;
-    let user=sqlx::query_as::<_,User>("SELECT u.id,u.username,u.display_name,u.role,u.enabled,u.created_at,u.preferences FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.enabled=true AND (s.mfa_verified OR NOT EXISTS(SELECT 1 FROM user_totp t WHERE t.user_id=u.id AND t.secret IS NOT NULL))")
+    let user=sqlx::query_as::<_,User>("SELECT u.id,u.username,u.display_name,u.role,u.enabled,u.created_at,u.preferences FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.enabled=true AND (NOT EXISTS(SELECT 1 FROM user_totp t WHERE t.user_id=u.id AND t.secret IS NOT NULL) OR EXISTS(SELECT 1 FROM user_totp t WHERE t.user_id=u.id AND t.secret IS NOT NULL AND t.generation=s.mfa_generation))")
         .bind(hash(token)).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(unauthorized)?;
     Ok(user.into())
 }
@@ -268,7 +268,7 @@ pub async fn login(
     };
     let password_valid = verify_password(input.password, encoded).await
         && row.as_ref().map(|r| r.2).unwrap_or(false);
-    let (valid, mfa_verified) = if password_valid {
+    let (valid, mfa_generation) = if password_valid {
         crate::totp::consume(&s.db, row.as_ref().unwrap().0, input.code.trim())
             .await
             .map_err(|_| {
@@ -278,7 +278,7 @@ pub async fn login(
                 )
             })?
     } else {
-        (false, false)
+        (false, None)
     };
     if !valid {
         sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
@@ -302,11 +302,11 @@ pub async fn login(
         .map_err(db_error)?;
     let token = key();
     sqlx::query(
-        "INSERT INTO sessions(token_hash,user_id,expires_at,mfa_verified) VALUES($1,$2,NOW()+INTERVAL '7 days',$3)",
+        "INSERT INTO sessions(token_hash,user_id,expires_at,mfa_generation) VALUES($1,$2,NOW()+INTERVAL '7 days',$3)",
     )
     .bind(hash(&token))
     .bind(id)
-    .bind(mfa_verified)
+    .bind(mfa_generation)
     .execute(&s.db)
     .await
     .map_err(db_error)?;

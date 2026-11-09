@@ -72,7 +72,7 @@ try:
     ok('/api/channels/'+channel+'/resume',{},'POST')
     wait(lambda:rows(r)[0]['status']=='sent')
     wait(lambda:sql(f"SELECT status FROM alert_deliveries WHERE policy_id='{policy}'")=='sent')
-    future=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=2)).isoformat()
+    future=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=4)).isoformat()
     ok('/api/channels/'+channel+'/pause',{'until':future});send(r,{'message':'Timed pause'})
     time.sleep(.3);assert not any(item.get('message')=='Timed pause' for item in received(path))
     wait(lambda:any(item.get('message')=='Timed pause' for item in received(path)))
@@ -97,6 +97,7 @@ try:
     preview=ok('/api/routes/'+quiet_route['id']+'/preview',{'message':'Quiet preview','priority':1})
     assert preview['routing']['delivery_policy']['quiet_hours'] and preview['routing']['delivery_policy']['timezone']=='UTC'
 
+    if time.time()%300>295:time.sleep(301-time.time()%300)
     dedup=route(channel,{'dedup_seconds':300},quota=1)
     leader=send(dedup,{'message':'Repeated script notification'})
     with ThreadPoolExecutor(max_workers=4) as pool:duplicates=list(pool.map(lambda _:send(dedup,{'message':'Repeated script notification'}),range(4)))
@@ -133,6 +134,10 @@ try:
     backups=enabled['recovery_codes'];assert len(backups)==10 and len(set(backups))==10
     assert request('/api/auth/me',headers=old_session)[0]==401
     assert ok('/api/auth/totp',headers=account)['enabled']
+    old_generation=sql(f"SELECT generation FROM user_totp WHERE user_id='{user}'")
+    late=uuid.uuid4().hex
+    sql(f"INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('{hashlib.sha256(late.encode()).hexdigest()}','{user}',NOW()+INTERVAL '1 day')")
+    assert request('/api/auth/me',headers={'Authorization':'','Cookie':'relayix-session='+late})[0]==401
     assert session(username,credentials['operator_password'])[0]==401
     assert session(username,credentials['operator_password'],otp(prepared['secret']))[0]==401
     current_code=otp(prepared['secret'],1)
@@ -144,6 +149,9 @@ try:
     assert session(username,credentials['operator_password'])[0]==200
     prepared=ok('/api/auth/totp/setup',{'password':credentials['operator_password']},headers=account)
     enabled=ok('/api/auth/totp/enable',{'code':otp(prepared['secret'])},headers=account)
+    late=uuid.uuid4().hex
+    sql(f"INSERT INTO sessions(token_hash,user_id,expires_at,mfa_generation) VALUES('{hashlib.sha256(late.encode()).hexdigest()}','{user}',NOW()+INTERVAL '1 day','{old_generation}')")
+    assert request('/api/auth/me',headers={'Authorization':'','Cookie':'relayix-session='+late})[0]==401
     for _ in range(5):assert session(username,credentials['operator_password'],'invalid')[0]==401
     assert sql(f"SELECT locked_until>NOW() FROM user_totp WHERE user_id='{user}'")=='t'
     assert session(username,credentials['operator_password'],enabled['recovery_codes'][0])[0]==401

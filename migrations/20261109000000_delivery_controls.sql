@@ -19,6 +19,7 @@ ALTER TABLE events ADD COLUMN deliver_at TIMESTAMPTZ;
 CREATE INDEX events_group ON events(group_id,created_at,id) WHERE group_id IS NOT NULL;
 CREATE TABLE user_totp (
  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ generation UUID NOT NULL DEFAULT gen_random_uuid(),
  secret TEXT,
  pending_secret TEXT,
  pending_expires_at TIMESTAMPTZ,
@@ -32,4 +33,4 @@ CREATE TABLE totp_recovery_codes (
  code_hash TEXT NOT NULL,
  PRIMARY KEY(user_id,code_hash)
 );
-ALTER TABLE sessions ADD COLUMN mfa_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sessions ADD COLUMN mfa_generation UUID;

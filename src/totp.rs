@@ -22,19 +22,41 @@ fn recovery_hash(code: &str) -> String {
 }
 
 /// A matched step or recovery code is consumed under a database row lock across replicas.
-pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, bool)> {
+#[derive(FromRow)]
+struct Factor {
+    secret: Option<String>,
+    last_step: i64,
+    locked_until: Option<DateTime<Utc>>,
+    generation: Uuid,
+}
+pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, Option<Uuid>)> {
     let mut tx = db.begin().await?;
-    let row: Option<(Option<String>, i64, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT secret,last_step,locked_until FROM user_totp WHERE user_id=$1 FOR UPDATE",
+    let result = consume_in(&mut tx, id, code).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+async fn consume_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    code: &str,
+) -> Result<(bool, Option<Uuid>)> {
+    let row: Option<Factor> = sqlx::query_as(
+        "SELECT secret,last_step,locked_until,generation FROM user_totp WHERE user_id=$1 FOR UPDATE",
     )
     .bind(id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    let Some((Some(secret), last, locked)) = row else {
-        return Ok((true, false));
+    let Some(Factor {
+        secret: Some(secret),
+        last_step: last,
+        locked_until: locked,
+        generation,
+    }) = row
+    else {
+        return Ok((true, None));
     };
     if locked.is_some_and(|date| date > Utc::now()) {
-        return Ok((false, true));
+        return Ok((false, Some(generation)));
     }
     let step = if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) {
         authenticator(&secret, "account")?
@@ -47,7 +69,7 @@ pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, bool)> 
         sqlx::query("DELETE FROM totp_recovery_codes WHERE user_id=$1 AND code_hash=$2")
             .bind(id)
             .bind(recovery_hash(code))
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?
             .rows_affected()
             == 1
@@ -57,13 +79,12 @@ pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, bool)> 
     let valid = step.is_some() || recovery;
     if valid {
         sqlx::query("UPDATE user_totp SET last_step=COALESCE($2,last_step),failures=0,locked_until=NULL WHERE user_id=$1")
-            .bind(id).bind(step.map(|s|s as i64)).execute(&mut *tx).await?;
+            .bind(id).bind(step.map(|s|s as i64)).execute(&mut **tx).await?;
     } else {
         sqlx::query("UPDATE user_totp SET failures=LEAST(failures+1,100),locked_until=CASE WHEN failures>=4 THEN NOW()+INTERVAL '15 minutes' ELSE locked_until END WHERE user_id=$1")
-            .bind(id).execute(&mut *tx).await?;
+            .bind(id).execute(&mut **tx).await?;
     }
-    tx.commit().await?;
-    Ok((valid, true))
+    Ok((valid, Some(generation)))
 }
 #[derive(Deserialize)]
 pub struct PasswordInput {
@@ -243,7 +264,7 @@ pub async fn enable(
     revoke_other_sessions(&mut tx, id, &h)
         .await
         .map_err(db_error)?;
-    sqlx::query("UPDATE sessions SET mfa_verified=true WHERE user_id=$1 AND token_hash=$2")
+    sqlx::query("UPDATE sessions SET mfa_generation=(SELECT generation FROM user_totp WHERE user_id=$1) WHERE user_id=$1 AND token_hash=$2")
         .bind(id)
         .bind(hash(auth::session_token(&h).unwrap_or("")))
         .execute(&mut *tx)
@@ -259,30 +280,17 @@ pub async fn disable(
 ) -> ApiResult<Value> {
     let actor = reauthenticate(&s, &h, &input.password).await?;
     let id = actor.id.unwrap();
-    let enabled: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM user_totp WHERE user_id=$1 AND secret IS NOT NULL)",
-    )
-    .bind(id)
-    .fetch_one(&s.db)
-    .await
-    .map_err(db_error)?;
-    if !enabled
-        || !consume(&s.db, id, input.code.trim())
-            .await
-            .map_err(|_| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Unable to verify authenticator",
-                )
-            })?
-            .0
-    {
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    let proof = consume_in(&mut tx, id, input.code.trim())
+        .await
+        .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Unable to verify authenticator"))?;
+    if !proof.0 || proof.1.is_none() {
+        tx.commit().await.map_err(db_error)?;
         return Err(err(
             StatusCode::UNAUTHORIZED,
             "Invalid authenticator or recovery code",
         ));
     }
-    let mut tx = s.db.begin().await.map_err(db_error)?;
     sqlx::query("DELETE FROM user_totp WHERE user_id=$1")
         .bind(id)
         .execute(&mut *tx)

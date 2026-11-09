@@ -252,9 +252,11 @@ pub(crate) async fn update_channel(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    for table in ["deliveries", "alert_deliveries"] {
-        let query = format!("UPDATE {table} SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued' AND error IS NOT NULL");
-        sqlx::query(&query)
+    for query in [
+        "UPDATE deliveries SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued' AND error IS NOT NULL",
+        "UPDATE alert_deliveries SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued' AND error IS NOT NULL",
+    ] {
+        sqlx::query(query)
             .bind(id)
             .execute(&mut *tx)
             .await
@@ -323,9 +325,15 @@ async fn set_manual_pause(
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;
-        for table in ["deliveries", "alert_deliveries"] {
-            sqlx::query(&format!("UPDATE {table} SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued'"))
-                .bind(id).execute(&mut *tx).await.map_err(db_error)?;
+        for query in [
+            "UPDATE deliveries SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued'",
+            "UPDATE alert_deliveries SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued'",
+        ] {
+            sqlx::query(query)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_error)?;
         }
     }
     tx.commit().await.map_err(db_error)?;
