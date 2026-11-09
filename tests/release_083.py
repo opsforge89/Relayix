@@ -49,11 +49,22 @@ def verify(api):
 ('{old}','{route['id']}','old','old',3,'{{}}','[\"{tag}\"]',NOW()-INTERVAL '90 days'),
 ('{pending}','{route['id']}','pending','pending',3,'{{}}','[\"{tag}\"]',NOW()-INTERVAL '90 days');
 INSERT INTO deliveries(id,event_id,channel_id,status,next_attempt_at) VALUES('{uuid.uuid4()}','{pending}','{channels[2]}','queued',NOW()+INTERVAL '1 day');""")
+        # Terminal alert states expire; recent and pending work survive the same sweep.
+        alert_ids={name:str(uuid.uuid4()) for name in ['sent','failed','cancelled','recent_cancelled','queued','processing']}
+        sql(f"UPDATE channels SET manual_paused=true WHERE id='{channels[2]}'")
+        for name,aid in alert_ids.items():
+            state='cancelled' if name=='recent_cancelled' else name
+            age='NOW()' if name=='recent_cancelled' else "NOW()-INTERVAL '90 days'"
+            sql(f"INSERT INTO alert_deliveries(id,channel_id,title,message,status,created_at,next_attempt_at,locked_at) VALUES('{aid}','{channels[2]}','Retention probe','Retain pending work','{state}',{age},NOW()+INTERVAL '1 day',NOW())")
         assert sql(f"SELECT uses FROM event_tags WHERE tag='{tag}'")=='2'
         wait(lambda:sql(f"SELECT COUNT(*) FROM events WHERE id='{old}'")=='0',70)
         assert sql(f"SELECT COUNT(*) FROM events WHERE id='{pending}'")=='1'
         assert sql(f"SELECT uses FROM event_tags WHERE tag='{tag}'")=='1'
         assert tag in api.ok('/api/tags')
+        wait(lambda:all(sql(f"SELECT COUNT(*) FROM alert_deliveries WHERE id='{alert_ids[name]}'")=='0' for name in ['sent','failed','cancelled']),70)
+        for name in ['recent_cancelled','queued','processing']:
+            assert sql(f"SELECT status FROM alert_deliveries WHERE id='{alert_ids[name]}'")==('cancelled' if name=='recent_cancelled' else name)
+
     finally:
         if route:api.ok('/api/routes/'+route['id'],method='DELETE')
         for channel in channels:api.ok('/api/channels/'+channel,method='DELETE')
