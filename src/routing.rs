@@ -292,7 +292,13 @@ async fn enqueue(
         .unwrap();
         scheduled_at = policy.allowed_at(scheduled_at.max(closes), event.priority);
     }
-    routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
+    if policy.quiet_enabled
+        || grouping.is_some()
+        || payload.get("deliver_at").is_some()
+        || payload.get("delay").is_some()
+    {
+        routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
+    }
     if let Some(role) = preview_role {
         let would_queue = routing["recipients"]
             .as_array()
