@@ -65,6 +65,7 @@ class HTTP(BaseHTTPRequestHandler):
         if self.path.startswith('/resilience088/'):
             case=self.path.rsplit('/',1)[-1]
             if case=='huge_rate':return self.reply(429,{'parameters':{'retry_after':1000000}}, {'Retry-After':'1000000'})
+            if case=='reject_message':return self.reply(413,{'error':'message rejected'})
             if case=='message' and json.loads(body).get('message')=='bad':return self.reply(413,{'error':'message rejected'})
             if case=='rate':return self.reply(429,{'parameters':{'retry_after':120}}, {'Retry-After':'20'})
             if case=='auth':return self.reply(401,{'error':'credential echo must never enter delivery history'})

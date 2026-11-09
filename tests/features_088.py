@@ -123,10 +123,12 @@ try:
     event=send(message_route,'bad')['event_id']
     wait(lambda:any(d['event_id']==event and d['status']=='failed' for d in rows(message_route)))
     assert health(message_channel)['state']=='healthy'
-    message_policy=ok('/api/alert-policies',{'name':'Message rejection history','enabled':True,'watch_channel_ids':[good],'destination_ids':[message_channel],'failure_threshold':1,'min_attempts':1,'window_minutes':15,'cooldown_minutes':1,'title':'Rejected alert','body':'bad'})['id'];policies.append(message_policy)
+    # The test endpoint generates its own body rather than using the policy template.
+    rejected_channel=channel('webhook',{'url':'http://mock:8000/resilience088/'+suffix+'/reject_message'})
+    message_policy=ok('/api/alert-policies',{'name':'Message rejection history','enabled':True,'watch_channel_ids':[good],'destination_ids':[rejected_channel],'failure_threshold':1,'min_attempts':1,'window_minutes':15,'cooldown_minutes':1,'title':'Rejected alert','body':'bad'})['id'];policies.append(message_policy)
     ok('/api/alert-policies/'+message_policy+'/test',{},'POST')
     rejected_alert=wait(lambda:next((a for a in ok('/api/alert-deliveries') if a['policy_name']=='Message rejection history' and a['status']=='failed'),None))
-    assert rejected_alert['error'] and health(message_channel)['consecutive_failures']==0
+    assert rejected_alert['error'] and health(rejected_channel)['consecutive_failures']==0
 
     # Remote retry delays have a one-day ceiling, and repaired settings resume both queues.
     huge=channel('webhook',{'url':'http://mock:8000/resilience088/'+suffix+'/huge_rate'});huge_route=route([huge]);send(huge_route)
