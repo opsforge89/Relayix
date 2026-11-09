@@ -125,7 +125,7 @@ For combined text limits, the title, separating line breaks and message share on
 
 ### Delivery controls
 
-Channels have **Pause** and **Resume** actions. Pause indefinitely, for an hour/day/week, or until a chosen date. Automatic notifications and alerts remain queued and consume no attempts. Requests already in progress may finish. A successful channel save resets automatic cooldowns, but preserves a manual pause. Resume clears both pauses and retry delays while preserving explicit scheduled dates and grouping windows. Direct Test sends and diagnostics remain available.
+Channels have **Pause** and **Resume** actions. Pause indefinitely, for an hour/day/week, or until a chosen date. Automatic notifications and alerts remain queued and consume no attempts. Requests already in progress may finish. A successful channel save resets automatic cooldowns, but preserves a manual pause. Manual resume opens a choice: **Send all queued deliveries** (the default) or **Cancel all queued deliveries**. Sending retains every queued notification and alert, including old messages, and preserves explicit dates, grouping windows and quiet hours. Cancellation marks all queued notifications and alerts for that channel as `cancelled`, including future scheduled deliveries; it does not delete incoming events or attempt history, trigger fallback, or stop sends already in progress. Both choices clear manual pauses and automatic cooldowns. A timed pause automatically sends its retained queue when it expires. Direct Test sends and diagnostics remain available.
 
 Route forms contain **Delivery timing and grouping**. All policies are disabled by default:
 
@@ -133,7 +133,7 @@ Route forms contain **Delivery timing and grouping**. All policies are disabled 
 | --- | --- |
 | Quiet hours | Choose an IANA timezone and start/end clock times, including overnight periods. Lower-priority messages wait until quiet hours end. DST gaps and repeated hours are handled using the timezone database. |
 | Urgent priority | Messages at or above this threshold bypass quiet hours, deduplication and digests. Default: 4. Explicit webhook schedules still apply. |
-| Deduplication | Set 5–300 seconds, or 0 to disable. Equal rendered title/body, priority and tags within a fixed window share one delivery marked `×N`. Different recipients, policies or explicit schedules form separate groups. |
+| Deduplication | Set 5–300 seconds, or 0 to disable. **Every non-urgent event, including a unique one, waits until the fixed window closes, for up to the selected number of seconds.** Equal rendered title/body, priority and tags share one delivery marked `×N`. Different recipients, policies or explicit schedules form separate groups. |
 | Digest | Choose hourly or every 24 hours and a priority cutoff. Lower-priority events share a summary; a digest contains at most 50 events, with additional batches if needed. Summaries shorten individual entries and remain subject to each integration's delivery limit. |
 
 Every incoming event keeps its original payload and rendered template in history. **Event details → Delivery group** identifies its leader, count, window and up to 50 members. A group's leader owns the actual deliveries and fallback recipients. Group membership freezes when delivery begins, so retries preserve the accepted group. Duplicate events added to an existing group return `grouped: true`, `queued: 0`, `group_leader_id` and `occurrences`; they are accepted, not discarded. Coalesced repeats do not consume another route quota slot; request/IP limits still apply. PostgreSQL coordinates concurrent sources and application replicas.
@@ -142,17 +142,21 @@ Digest windows are fixed UTC windows; quiet hours can postpone their delivery fu
 
 ### Scheduled webhooks
 
-Add either `deliver_at` (RFC 3339, including a timezone) or `delay` (whole seconds) to the webhook JSON. Both fields together are rejected. Schedule at most 30 days ahead; a timestamp in the past becomes immediately eligible.
+Use either the `X-Relay-Deliver-At` header (RFC 3339, including a timezone) or `X-Relay-Delay` (0–2592000 whole seconds). Both headers together, duplicate scheduling headers, and malformed values return `400`. Schedule at most 30 days ahead; a timestamp in the past becomes immediately eligible.
 
-```json
-{"title":"Maintenance reminder","message":"Check the backup","deliver_at":"2026-11-10T09:00:00+03:00"}
+```bash
+curl https://relay.example.com/h/ROUTE_SLUG \
+  -H 'Content-Type: application/json' \
+  -H 'X-Relay-Key: YOUR_ROUTE_KEY' \
+  -H 'X-Relay-Delay: 3600' \
+  --data '{"message":"Remind me in one hour"}'
 ```
 
-```json
-{"message":"Remind me in one hour","delay":3600}
-```
+For an absolute date, replace the delay header with `X-Relay-Deliver-At: 2026-11-10T09:00:00+03:00`.
 
-Scheduled events survive restarts, respect manual pauses and quiet hours, and consume no transport attempts while waiting. Manual retries and channel resume do not bypass the original schedule. Route previews show the earliest delivery time and grouping policy without storing events or contacting a destination.
+**Compatibility:** JSON keys named `delay` and `deliver_at` are ordinary source data and never schedule or reject a notification. Clients that used the 0.9.0 JSON scheduling fields must move them into these headers. Original JSON remains intact in history and templates.
+
+Scheduled events survive restarts, respect manual pauses and quiet hours, and consume no transport attempts while waiting. Manual retries and the send-all resume option do not bypass the original schedule. The cancel-backlog option also cancels scheduled deliveries. Route test and preview endpoints accept the same scheduling headers; previews store nothing and show the earliest delivery time and grouping policy. Reusing an `Idempotency-Key` with a different schedule returns `409`, just as changing the payload does.
 
 ### Connection examples
 
@@ -303,15 +307,15 @@ Failure means `failed > 0`, `success: false`, or a failure/canceled status in `s
 
 If required variables are missing, the original message/title is used. If neither the template nor the original payload can supply useful content, the webhook returns `400` with an explanation. Rendering and the template version are saved per event. Editing or deleting a template affects new events; retries and fallback retain the accepted event's text. Original payload and template snapshot are available in **Incoming webhooks → Details → Technical**. Historical disabled template records remain separate and are never activated automatically.
 
-## Optional administrator two-factor authentication
+## Optional two-factor authentication
 
-TOTP is **off by default** and is enabled separately for each administrator password account in **Settings → Two-factor authentication**. Sign in with a username and password, confirm the current password, add the displayed key manually to an authenticator app (SHA-1, six digits, 30-second period), and enter its current code. Setup expires after ten minutes and does not enable protection until confirmation succeeds.
+TOTP is **off by default** and is enabled separately for each password account, including members in **Settings → Two-factor authentication**. Sign in with a username and password, confirm the current password, add the displayed key manually to an authenticator app (SHA-1, six digits, 30-second period), and enter its current code. Setup expires after ten minutes and does not enable protection until confirmation succeeds.
 
-Enabling protection shows ten recovery codes once and signs out other sessions. Save the codes offline. Thereafter, password sign-in also requires an unused authenticator code or recovery code. Each matched TOTP time step is accepted once across replicas, with one step of clock skew. Recovery codes are stored only as hashes and consumed atomically. Failed authenticator/settings checks are rate-limited; five failures impose a 15-minute cooldown, in addition to existing login limits. Keep the server clock synchronized.
+Enabling protection shows ten recovery codes once and signs out other sessions. Save the codes offline. Thereafter, password sign-in also requires an unused authenticator code or recovery code. Each matched TOTP time step is accepted once across replicas, with one step of clock skew. Recovery codes are stored only as hashes and consumed atomically. Five failed authenticator sign-in checks impose a 15-minute account cooldown, in addition to existing login limits. Security-settings password and code failures have a separate five-attempt/15-minute limit on the current session. These settings failures never lock password sign-in or other sessions; a new password sign-in can manage security settings again. Incorrect settings proofs return `400` without signing the current session out; a throttled settings session returns `429`. Keep the server clock synchronized.
 
-Disabling protection requires the current password and an unused authenticator/recovery code. Other sessions are revoked. Authenticator secrets remain in the private database and are never included in account APIs or configuration exports; restrict database/backup access. Setup keys and recovery codes are not stored in browser preferences or local storage.
+Disabling protection requires the current password and an unused authenticator/recovery code. Other sessions are revoked. Authenticator secrets and pending setup keys are stored **unencrypted in the database**, just like channel credentials; they cannot be password-hashed because TOTP verification needs the original key. Database or backup access can therefore bypass this factor. Restrict database/backup access and use encrypted storage/backups with keys managed outside the database. Account APIs and configuration exports never expose stored authenticator secrets. Setup keys and recovery codes are not stored in browser preferences or local storage.
 
-The administrator API token remains an independent recovery credential. If the authenticator and recovery codes are lost, use it to `POST /api/users/{id}/totp/reset`; cookie sessions cannot call this recovery endpoint. Reset disables TOTP and revokes that user's sessions. Password resets and role changes do not silently disable an enrolled authenticator.
+The administrator API token grants **full administrator API access without TOTP**, including the token login option. TOTP protects password sign-in, not a stolen `ADMIN_TOKEN`. Treat this token as an independent administrator password: use a long random value, restrict access to deployment secrets, and rotate it if exposed. If the authenticator and recovery codes are lost, use it to `POST /api/users/{id}/totp/reset`; cookie sessions cannot call this recovery endpoint. Reset disables TOTP and revokes that user's sessions. Password resets and role changes do not silently disable an enrolled authenticator.
 
 ## API
 
@@ -323,7 +327,7 @@ Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorizati
 | POST | `/api/auth/login` | Username/password login; returns HttpOnly session cookie |
 | POST | `/api/auth/logout` | Revoke current session |
 | GET | `/api/auth/me` | Current account and role |
-| GET | `/api/auth/totp` | Own administrator TOTP status and remaining recovery-code count |
+| GET | `/api/auth/totp` | Own account TOTP status and remaining recovery-code count |
 | POST | `/api/auth/totp/setup` | Password-confirmed enrollment preparation |
 | POST | `/api/auth/totp/enable` | Confirm code and receive one-time recovery codes |
 | POST | `/api/auth/totp/disable` | Require password and authenticator/recovery code |
@@ -337,7 +341,7 @@ Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorizati
 | PUT / DELETE | `/api/channels/{id}` | Edit/delete channel |
 | POST | `/api/channels/{id}/test` | Direct test notification |
 | POST | `/api/channels/{id}/pause` | Pause automatic delivery; JSON accepts optional RFC 3339 until, at most 365 days ahead |
-| POST | `/api/channels/{id}/resume` | Clear manual/automatic pauses and release retries while preserving scheduled dates |
+| POST | `/api/channels/{id}/resume` | Optional JSON `{"backlog":"send"}` (default) or `{"backlog":"cancel"}`; retain or cancel all queued deliveries and clear pauses/cooldowns |
 | POST | `/api/channels/{id}/diagnose` | Read-only diagnostics for saved settings |
 | POST | `/api/channels/diagnose` | Read-only draft diagnostics; optional id restores masked secrets for unchanged destinations |
 | POST | `/api/channels/preview` | Render a draft message without storing or sending; accepts kind, config, title, message and optional priority |
@@ -428,3 +432,9 @@ Sign in with a personal account, then open **My profile → Delivery alerts**. C
 A final-failure trigger requires an actual `failed` state, not merely a high historical attempt count. A warning is recorded once per recipient delivery and retry cycle; cooldown limits warnings about new failures. Disabling a subscription or user prevents queued personal warnings from being sent. Deleted users' subscriptions and private warning records are removed. Shared administrator rules remain separate and do not expose personal subscriptions or personal history. Alert failures never generate additional alerts.
 
 Personal endpoints are `/api/auth/delivery-alerts` (GET/PUT), `/api/auth/delivery-alerts/test` (POST), `/api/auth/delivery-alerts/history` (GET), and `/api/auth/delivery-alerts/history/{id}/retry` (POST). They always derive ownership from the authenticated user. The administrator API token has no personal account and cannot use these endpoints. Recovery notifications are a separate future enhancement.
+
+### Cached PostgreSQL plan errors after an upgrade
+
+If PostgreSQL reports `cached plan must not change result type` (SQLSTATE `0A000`) after an additive schema migration, an already-open connection may retain a prepared query with the old result columns. Restart only the application service with `docker compose restart app` to reconnect; preserve the database and its volume. If multiple application replicas share the database, restart each replica that still holds old connections.
+
+Relayix 0.9.1 uses explicit result columns for channel, template and alert-policy reads/writes so adding unrelated columns does not change their prepared result shape. The release suite warms the live application connection pool, adds temporary columns in its isolated test database and repeats the API reads without restarting the app. This protection applies to additive columns; changing the type of an existing selected column still requires a coordinated migration/restart. PostgreSQL prepared statements belong to their database session; see the [PostgreSQL PREPARE documentation](https://www.postgresql.org/docs/current/sql-prepare.html).

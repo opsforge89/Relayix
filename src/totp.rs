@@ -1,4 +1,4 @@
-//! Opt-in administrator TOTP enrollment, one-use codes and recovery credentials.
+//! Opt-in account TOTP enrollment, one-use codes and recovery credentials.
 use crate::*;
 use totp_rs::{Builder, Secret, Totp};
 
@@ -12,9 +12,21 @@ fn authenticator(secret: &str, account: &str) -> Result<Totp> {
         .build()
         .map_err(|_| anyhow!("Unable to configure authenticator"))
 }
-async fn failed(db: &PgPool, id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("UPDATE user_totp SET failures=LEAST(failures+1,100),locked_until=CASE WHEN failures>=4 THEN NOW()+INTERVAL '15 minutes' ELSE locked_until END WHERE user_id=$1")
-        .bind(id).execute(db).await?;
+async fn failed_settings(s: &AppState, h: &HeaderMap, id: Uuid) -> sqlx::Result<()> {
+    sqlx::query("UPDATE sessions SET totp_settings_failures=CASE WHEN totp_settings_locked_until<=NOW() THEN 1 ELSE LEAST(totp_settings_failures+1,100) END,totp_settings_locked_until=CASE WHEN totp_settings_locked_until<=NOW() THEN NULL WHEN totp_settings_failures>=4 THEN NOW()+INTERVAL '15 minutes' ELSE totp_settings_locked_until END WHERE user_id=$1 AND token_hash=$2")
+        .bind(id).bind(hash(auth::session_token(h).unwrap_or(""))).execute(&s.db).await?;
+    Ok(())
+}
+async fn settings_available(
+    s: &AppState,
+    h: &HeaderMap,
+    id: Uuid,
+) -> std::result::Result<(), (StatusCode, Json<Value>)> {
+    let locked: bool = sqlx::query_scalar("SELECT COALESCE(totp_settings_locked_until>NOW(),false) FROM sessions WHERE user_id=$1 AND token_hash=$2")
+        .bind(id).bind(hash(auth::session_token(h).unwrap_or(""))).fetch_one(&s.db).await.map_err(db_error)?;
+    if locked {
+        return Err(err(StatusCode::TOO_MANY_REQUESTS, "Too many security-settings attempts in this session; retry in 15 minutes or sign in again"));
+    }
     Ok(())
 }
 fn recovery_hash(code: &str) -> String {
@@ -31,7 +43,7 @@ struct Factor {
 }
 pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, Option<Uuid>)> {
     let mut tx = db.begin().await?;
-    let result = consume_in(&mut tx, id, code).await?;
+    let result = consume_in(&mut tx, id, code, true).await?;
     tx.commit().await?;
     Ok(result)
 }
@@ -39,6 +51,7 @@ async fn consume_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
     code: &str,
+    login: bool,
 ) -> Result<(bool, Option<Uuid>)> {
     let row: Option<Factor> = sqlx::query_as(
         "SELECT secret,last_step,locked_until,generation FROM user_totp WHERE user_id=$1 FOR UPDATE",
@@ -55,7 +68,7 @@ async fn consume_in(
     else {
         return Ok((true, None));
     };
-    if locked.is_some_and(|date| date > Utc::now()) {
+    if login && locked.is_some_and(|date| date > Utc::now()) {
         return Ok((false, Some(generation)));
     }
     let step = if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) {
@@ -78,10 +91,10 @@ async fn consume_in(
     };
     let valid = step.is_some() || recovery;
     if valid {
-        sqlx::query("UPDATE user_totp SET last_step=COALESCE($2,last_step),failures=0,locked_until=NULL WHERE user_id=$1")
-            .bind(id).bind(step.map(|s|s as i64)).execute(&mut **tx).await?;
-    } else {
-        sqlx::query("UPDATE user_totp SET failures=LEAST(failures+1,100),locked_until=CASE WHEN failures>=4 THEN NOW()+INTERVAL '15 minutes' ELSE locked_until END WHERE user_id=$1")
+        sqlx::query("UPDATE user_totp SET last_step=COALESCE($2,last_step),failures=CASE WHEN $3 THEN 0 ELSE failures END,locked_until=CASE WHEN $3 THEN NULL ELSE locked_until END WHERE user_id=$1")
+            .bind(id).bind(step.map(|s|s as i64)).bind(login).execute(&mut **tx).await?;
+    } else if login {
+        sqlx::query("UPDATE user_totp SET failures=CASE WHEN locked_until<=NOW() THEN 1 ELSE LEAST(failures+1,100) END,locked_until=CASE WHEN locked_until<=NOW() THEN NULL WHEN failures>=4 THEN NOW()+INTERVAL '15 minutes' ELSE locked_until END WHERE user_id=$1")
             .bind(id).execute(&mut **tx).await?;
     }
     Ok((valid, Some(generation)))
@@ -100,7 +113,7 @@ async fn account(
     s: &AppState,
     h: &HeaderMap,
 ) -> std::result::Result<auth::Principal, (StatusCode, Json<Value>)> {
-    let actor = auth::require_admin(h, s).await?;
+    let actor = auth::authenticated(h, s).await?;
     if actor.id.is_none() {
         return Err(err(
             StatusCode::BAD_REQUEST,
@@ -121,28 +134,16 @@ async fn reauthenticate(
         .execute(&s.db)
         .await
         .map_err(db_error)?;
-    let locked: bool = sqlx::query_scalar(
-        "SELECT COALESCE(locked_until>NOW(),false) FROM user_totp WHERE user_id=$1",
-    )
-    .bind(id)
-    .fetch_one(&s.db)
-    .await
-    .map_err(db_error)?;
-    if locked {
-        return Err(err(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many verification attempts; retry in 15 minutes",
-        ));
-    }
+    settings_available(s, h, id).await?;
     let encoded: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id=$1")
         .bind(id)
         .fetch_one(&s.db)
         .await
         .map_err(db_error)?;
     if password.len() > 512 || !auth::verify(password.to_owned(), encoded).await {
-        failed(&s.db, id).await.map_err(db_error)?;
+        failed_settings(s, h, id).await.map_err(db_error)?;
         return Err(err(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::BAD_REQUEST,
             "Current password is incorrect",
         ));
     }
@@ -220,27 +221,22 @@ pub async fn enable(
 ) -> ApiResult<Value> {
     let actor = account(&s, &h).await?;
     let id = actor.id.unwrap();
+    settings_available(&s, &h, id).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let row:Option<(String,Option<DateTime<Utc>>)>=sqlx::query_as("SELECT pending_secret,locked_until FROM user_totp WHERE user_id=$1 AND secret IS NULL AND pending_secret IS NOT NULL AND pending_expires_at>NOW() FOR UPDATE")
+    let row:Option<(String,Option<DateTime<Utc>>)>=sqlx::query_as("SELECT pending_secret,pending_expires_at FROM user_totp WHERE user_id=$1 AND secret IS NULL AND pending_secret IS NOT NULL AND pending_expires_at>NOW() FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?;
-    let (secret, locked) = row.ok_or_else(|| {
+    let (secret, _) = row.ok_or_else(|| {
         err(
             StatusCode::BAD_REQUEST,
             "Enrollment expired; start setup again",
         )
     })?;
-    if locked.is_some_and(|date| date > Utc::now()) {
-        return Err(err(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Too many verification attempts; retry in 15 minutes",
-        ));
-    }
     let step = authenticator(&secret, &actor.username)
         .ok()
         .and_then(|auth| auth.check(input.code.trim(), Utc::now().timestamp().max(0) as u64));
     let Some(step) = step else {
         tx.rollback().await.map_err(db_error)?;
-        failed(&s.db, id).await.map_err(db_error)?;
+        failed_settings(&s, &h, id).await.map_err(db_error)?;
         return Err(err(StatusCode::BAD_REQUEST, "Invalid authenticator code"));
     };
     sqlx::query("UPDATE user_totp SET secret=pending_secret,pending_secret=NULL,pending_expires_at=NULL,enabled_at=NOW(),last_step=$2,failures=0,locked_until=NULL WHERE user_id=$1")
@@ -264,7 +260,7 @@ pub async fn enable(
     revoke_other_sessions(&mut tx, id, &h)
         .await
         .map_err(db_error)?;
-    sqlx::query("UPDATE sessions SET mfa_generation=(SELECT generation FROM user_totp WHERE user_id=$1) WHERE user_id=$1 AND token_hash=$2")
+    sqlx::query("UPDATE sessions SET mfa_generation=(SELECT generation FROM user_totp WHERE user_id=$1),totp_settings_failures=0,totp_settings_locked_until=NULL WHERE user_id=$1 AND token_hash=$2")
         .bind(id)
         .bind(hash(auth::session_token(&h).unwrap_or("")))
         .execute(&mut *tx)
@@ -281,7 +277,7 @@ pub async fn disable(
     let actor = reauthenticate(&s, &h, &input.password).await?;
     let id = actor.id.unwrap();
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let proof = consume_in(&mut tx, id, input.code.trim())
+    let proof = consume_in(&mut tx, id, input.code.trim(), false)
         .await
         .map_err(|_| {
             err(
@@ -291,8 +287,9 @@ pub async fn disable(
         })?;
     if !proof.0 || proof.1.is_none() {
         tx.commit().await.map_err(db_error)?;
+        failed_settings(&s, &h, id).await.map_err(db_error)?;
         return Err(err(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::BAD_REQUEST,
             "Invalid authenticator or recovery code",
         ));
     }
@@ -309,6 +306,8 @@ pub async fn disable(
     revoke_other_sessions(&mut tx, id, &h)
         .await
         .map_err(db_error)?;
+    sqlx::query("UPDATE sessions SET totp_settings_failures=0,totp_settings_locked_until=NULL WHERE user_id=$1 AND token_hash=$2")
+        .bind(id).bind(hash(auth::session_token(&h).unwrap_or(""))).execute(&mut *tx).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"enabled":false})))
 }

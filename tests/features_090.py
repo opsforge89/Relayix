@@ -52,7 +52,7 @@ suffix=uuid.uuid4().hex
 def route(channel,settings=None,quota=0):
     value=ok('/api/routes',{'name':'090 route','channel_ids':[channel],'delivery_settings':settings or {},'rate_limit_per_minute':quota});routes.append(value['id']);return value
 
-def send(r,body):return ok(r['endpoint'],body,headers={'X-Relay-Key':r['token']})
+def send(r,body,headers=None):return ok(r['endpoint'],body,headers={'X-Relay-Key':r['token'],**(headers or {})})
 def rows(r):return ok('/api/deliveries?route_id='+r['id']+'&page_size=100')['items']
 
 try:
@@ -61,7 +61,7 @@ try:
     r=route(channel)
     assert 'delivery_policy' not in ok('/api/routes/'+r['id']+'/preview',{'message':'Immediate preview'})['routing']
     before=ok('/api/events?route_id='+r['id'])['total']
-    scheduled_preview=ok('/api/routes/'+r['id']+'/preview',{'message':'Scheduled preview','delay':60})
+    scheduled_preview=ok('/api/routes/'+r['id']+'/preview',{'message':'Scheduled preview'},headers={'X-Relay-Delay':'60'})
     assert scheduled_preview['routing']['delivery_policy']['not_before']
     assert ok('/api/events?route_id='+r['id'])['total']==before
     assert request('/api/channels/'+channel+'/pause',{},headers={'Authorization':''})[0]==401
@@ -74,24 +74,48 @@ try:
     saved=next(c for c in ok('/api/channels') if c['id']==channel)
     ok('/api/channels/'+channel,saved,'PUT')
     assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
-    ok('/api/channels/'+channel+'/resume',{},'POST')
+    ok('/api/channels/'+channel+'/resume',method='POST')
     wait(lambda:rows(r)[0]['status']=='sent')
     wait(lambda:sql(f"SELECT status FROM alert_deliveries WHERE policy_id='{policy}'")=='sent')
     future=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=4)).isoformat()
     ok('/api/channels/'+channel+'/pause',{'until':future});send(r,{'message':'Timed pause'})
     time.sleep(.3);assert not any(item.get('message')=='Timed pause' for item in received(path))
     wait(lambda:any(item.get('message')=='Timed pause' for item in received(path)))
-    send(r,{'message':'Scheduled delivery','delay':2})
+    send(r,{'message':'Scheduled delivery'},{'X-Relay-Delay':'2'})
     time.sleep(.3);assert not any(item.get('message')=='Scheduled delivery' for item in received(path))
     wait(lambda:any(item.get('message')=='Scheduled delivery' for item in received(path)))
-    for payload in [{'delay':-1},{'delay':2592001},{'deliver_at':'invalid'},{'delay':1,'deliver_at':future}]:
-        assert request(r['endpoint'],{'message':'Invalid schedule',**payload},headers={'X-Relay-Key':r['token']})[0]==400
+    for headers in [{'X-Relay-Delay':'-1'},{'X-Relay-Delay':'2592001'},{'X-Relay-Delay':'1.5'},{'X-Relay-Delay':'5m'},{'X-Relay-Deliver-At':'invalid'},{'X-Relay-Delay':'1','X-Relay-Deliver-At':future}]:
+        assert request(r['endpoint'],{'message':'Invalid schedule'},headers={'X-Relay-Key':r['token'],**headers})[0]==400
+    for value in [1.5,'5m',120]:
+        result=send(r,{'message':'Ordinary JSON fields '+str(value),'delay':value,'deliver_at':'source-specific metadata'})
+        wait(lambda:any(d['event_id']==result['event_id'] and d['status']=='sent' for d in rows(r)))
+        assert ok('/api/events/'+result['event_id'])['original_payload']['delay']==value
+    key=uuid.uuid4().hex
+    send(r,{'message':'Schedule idempotency'},{'Idempotency-Key':key,'X-Relay-Delay':'60'})
+    assert send(r,{'message':'Schedule idempotency'},{'Idempotency-Key':key,'X-Relay-Delay':'60'})['duplicate']
+    assert request(r['endpoint'],{'message':'Schedule idempotency'},headers={'X-Relay-Key':r['token'],'Idempotency-Key':key,'X-Relay-Delay':'120'})[0]==409
     later=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=1)).isoformat()
-    scheduled=send(r,{'message':'Resume preserves explicit date','deliver_at':later})
+    scheduled=send(r,{'message':'Resume preserves explicit date'},{'X-Relay-Deliver-At':later})
     ok('/api/channels/'+channel+'/pause',{});ok('/api/channels/'+channel+'/resume',{},'POST')
     time.sleep(.3)
     delayed=next(d for d in rows(r) if d['event_id']==scheduled['event_id']);assert delayed['attempts']==0
     assert sql(f"SELECT not_before>NOW()+INTERVAL '50 minutes' FROM deliveries WHERE id='{delayed['id']}'")=='t'
+
+    ok('/api/channels/'+channel+'/pause',{})
+    cancelled_event=send(r,{'message':'Old vacation backlog'})
+    ok('/api/alert-policies/'+policy+'/test',{},'POST')
+    assert request('/api/channels/'+channel+'/resume',{'backlog':'invalid'},'POST')[0]==400
+    assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
+    resumed=ok('/api/channels/'+channel+'/resume',{'backlog':'cancel'},'POST')
+    assert resumed['cancelled']>=3
+    assert next(d for d in rows(r) if d['event_id']==cancelled_event['event_id'])['status']=='cancelled'
+    assert next(d for d in rows(r) if d['event_id']==scheduled['event_id'])['status']=='cancelled'
+    assert sql(f"SELECT COUNT(*) FROM alert_deliveries WHERE policy_id='{policy}' AND status='cancelled'")=='1'
+    assert ok('/api/deliveries?route_id='+r['id']+'&status=cancelled')['total']>=2
+    assert ok('/api/events/'+cancelled_event['event_id'])['message']=='Old vacation backlog'
+    assert not any(p.get('message')=='Old vacation backlog' for p in received(path))
+    fresh=send(r,{'message':'Fresh after backlog cancellation'})
+    wait(lambda:any(d['event_id']==fresh['event_id'] and d['status']=='sent' for d in rows(r)))
 
     now=datetime.datetime.now(datetime.timezone.utc)
     quiet={'quiet_enabled':True,'timezone':'UTC','quiet_start':(now-datetime.timedelta(minutes=1)).strftime('%H:%M'),'quiet_end':(now+datetime.timedelta(minutes=2)).strftime('%H:%M'),'urgent_priority':4}
@@ -128,23 +152,34 @@ try:
     exported=ok('/api/config/export');assert next(item for item in exported['routes'] if item['key']==digest['id'])['delivery_settings']['digest_seconds']==3600
 
     username='totp-'+suffix
-    user=ok('/api/users',{'username':username,'display_name':'TOTP regression','role':'admin','password':credentials['operator_password']})['id'];users.append(user)
+    user=ok('/api/users',{'username':username,'display_name':'TOTP member regression','role':'member','password':credentials['operator_password']})['id'];users.append(user)
     code,_,account=session(username,credentials['operator_password']);assert code==200
     code,_,old_session=session(username,credentials['operator_password']);assert code==200
     assert ok('/api/auth/totp',headers=account)['enabled'] is False
     prepared=ok('/api/auth/totp/setup',{'password':credentials['operator_password']},headers=account)
     assert 'otpauth://totp/' in prepared['uri'] and prepared['secret']
     assert not ok('/api/auth/totp',headers=account)['enabled']
-    enabled=ok('/api/auth/totp/enable',{'code':otp(prepared['secret'])},headers=account)
+    enrolled_code=otp(prepared['secret'])
+    enabled=ok('/api/auth/totp/enable',{'code':enrolled_code},headers=account)
     backups=enabled['recovery_codes'];assert len(backups)==10 and len(set(backups))==10
     assert request('/api/auth/me',headers=old_session)[0]==401
+    assert ok('/api/auth/totp',headers=account)['enabled']
+    # A stolen session cannot lock out the account by guessing settings passwords/codes.
+    status,_,settings_session=session(username,credentials['operator_password'],backups[9]);assert status==200
+    for _ in range(5):assert request('/api/auth/totp/setup',{'password':'wrong'},headers=settings_session)[0]==400
+    assert request('/api/auth/totp/setup',{'password':credentials['operator_password']},headers=settings_session)[0]==429
+    assert sql(f"SELECT failures=0 AND locked_until IS NULL FROM user_totp WHERE user_id='{user}'")=='t'
+    status,_,code_session=session(username,credentials['operator_password'],backups[8]);assert status==200
+    for _ in range(5):assert request('/api/auth/totp/disable',{'password':credentials['operator_password'],'code':'invalid'},headers=code_session)[0]==400
+    assert request('/api/auth/totp/disable',{'password':credentials['operator_password'],'code':backups[7]},headers=code_session)[0]==429
+    assert sql(f"SELECT failures=0 AND locked_until IS NULL FROM user_totp WHERE user_id='{user}'")=='t'
     assert ok('/api/auth/totp',headers=account)['enabled']
     old_generation=sql(f"SELECT generation FROM user_totp WHERE user_id='{user}'")
     late=uuid.uuid4().hex
     sql(f"INSERT INTO sessions(token_hash,user_id,expires_at) VALUES('{hashlib.sha256(late.encode()).hexdigest()}','{user}',NOW()+INTERVAL '1 day')")
     assert request('/api/auth/me',headers={'Authorization':'','Cookie':'relayix-session='+late})[0]==401
     assert session(username,credentials['operator_password'])[0]==401
-    assert session(username,credentials['operator_password'],otp(prepared['secret']))[0]==401
+    assert session(username,credentials['operator_password'],enrolled_code)[0]==401
     current_code=otp(prepared['secret'],1)
     assert session(username,credentials['operator_password'],current_code)[0]==200
     assert session(username,credentials['operator_password'],current_code)[0]==401

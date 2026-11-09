@@ -106,7 +106,7 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
 pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut result =
-        sqlx::query_as::<_, Channel>("SELECT * FROM channels ORDER BY created_at DESC")
+        sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels ORDER BY created_at DESC")
             .fetch_all(&s.db)
             .await
             .map_err(db_error)?;
@@ -276,14 +276,41 @@ pub async fn pause_channel(
     Path(id): Path<Uuid>,
     Json(input): Json<PauseInput>,
 ) -> ApiResult<Value> {
-    set_manual_pause(&s, &h, id, true, input.until).await
+    set_manual_pause(&s, &h, id, true, input.until, false).await
+}
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResumeInput {
+    backlog: Backlog,
+}
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Backlog {
+    #[default]
+    Send,
+    Cancel,
 }
 pub async fn resume_channel(
     State(s): State<AppState>,
     h: HeaderMap,
     Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> ApiResult<Value> {
-    set_manual_pause(&s, &h, id, false, None).await
+    let input: ResumeInput = if body.is_empty() {
+        ResumeInput::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "Use backlog: send or cancel"))?
+    };
+    set_manual_pause(
+        &s,
+        &h,
+        id,
+        false,
+        None,
+        matches!(input.backlog, Backlog::Cancel),
+    )
+    .await
 }
 async fn set_manual_pause(
     s: &AppState,
@@ -291,6 +318,7 @@ async fn set_manual_pause(
     id: Uuid,
     paused: bool,
     until: Option<DateTime<Utc>>,
+    cancel_backlog: bool,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(h, s).await?;
     if until
@@ -319,6 +347,15 @@ async fn set_manual_pause(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    let mut cancelled = 0;
+    if cancel_backlog {
+        for query in [
+            "UPDATE deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued'",
+            "UPDATE alert_deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued'",
+        ] {
+            cancelled += sqlx::query(query).bind(id).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
+        }
+    }
     if !paused {
         sqlx::query("DELETE FROM channel_health WHERE channel_id=$1")
             .bind(id)
@@ -337,7 +374,9 @@ async fn set_manual_pause(
         }
     }
     tx.commit().await.map_err(db_error)?;
-    Ok(Json(json!({"ok":true,"paused":paused,"until":until})))
+    Ok(Json(
+        json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled}),
+    ))
 }
 pub(crate) async fn delete_channel(
     State(s): State<AppState>,
@@ -392,7 +431,7 @@ pub(crate) async fn test_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let c = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
         .await

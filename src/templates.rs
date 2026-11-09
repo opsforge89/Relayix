@@ -308,7 +308,7 @@ pub fn render(template: &Template, payload: &Value) -> Result<(Value, Value)> {
 pub async fn list(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<Template>> {
     auth::authenticated(&h, &s).await?;
     Ok(Json(
-        sqlx::query_as("SELECT * FROM message_templates ORDER BY LOWER(name),id")
+        sqlx::query_as("SELECT id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field,version,created_at,updated_at FROM message_templates ORDER BY LOWER(name),id")
             .fetch_all(&s.db)
             .await
             .map_err(db_error)?,
@@ -330,7 +330,7 @@ pub async fn create(
     let user = auth::authenticated(&h, &s).await?;
     validate(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let template:Template=sqlx::query_as("INSERT INTO message_templates(id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *").bind(Uuid::new_v4()).bind(input.name.trim()).bind(input.title).bind(input.body).bind(input.link_label).bind(input.link_url).bind(input.link_failure_only).bind(input.computed_status).bind(input.passed_field).bind(input.failed_field).fetch_one(&mut *tx).await.map_err(db_error)?;
+    let template:Template=sqlx::query_as("INSERT INTO message_templates(id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field,version,created_at,updated_at").bind(Uuid::new_v4()).bind(input.name.trim()).bind(input.title).bind(input.body).bind(input.link_label).bind(input.link_url).bind(input.link_failure_only).bind(input.computed_status).bind(input.passed_field).bind(input.failed_field).fetch_one(&mut *tx).await.map_err(db_error)?;
     record(&mut tx, &template, &user.display_name)
         .await
         .map_err(db_error)?;
@@ -340,7 +340,7 @@ pub async fn create(
 async fn replace(s: &AppState, id: Uuid, input: Input, author: &str) -> ApiResult<Template> {
     validate(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let template:Option<Template>=sqlx::query_as("UPDATE message_templates SET name=$2,title=$3,body=$4,link_label=$5,link_url=$6,link_failure_only=$7,computed_status=$8,passed_field=$9,failed_field=$10,version=version+1,updated_at=NOW() WHERE id=$1 RETURNING *").bind(id).bind(input.name.trim()).bind(input.title).bind(input.body).bind(input.link_label).bind(input.link_url).bind(input.link_failure_only).bind(input.computed_status).bind(input.passed_field).bind(input.failed_field).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    let template:Option<Template>=sqlx::query_as("UPDATE message_templates SET name=$2,title=$3,body=$4,link_label=$5,link_url=$6,link_failure_only=$7,computed_status=$8,passed_field=$9,failed_field=$10,version=version+1,updated_at=NOW() WHERE id=$1 RETURNING id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field,version,created_at,updated_at").bind(id).bind(input.name.trim()).bind(input.title).bind(input.body).bind(input.link_label).bind(input.link_url).bind(input.link_failure_only).bind(input.computed_status).bind(input.passed_field).bind(input.failed_field).fetch_optional(&mut *tx).await.map_err(db_error)?;
     let template = template.ok_or_else(|| err(StatusCode::NOT_FOUND, "Template not found"))?;
     record(&mut tx, &template, author).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;

@@ -2,7 +2,7 @@ name: relayix
 services:
   app:
     container_name: ${COMPOSE_PROJECT_NAME:-relayix}-app
-    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.9.0}
+    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.9.1}
     restart: unless-stopped
     stop_grace_period: 75s
     networks: [default]

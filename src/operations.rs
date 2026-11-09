@@ -221,7 +221,7 @@ async fn deliver_owned(
 ) -> Result<()> {
     let work = async {
         let payload = event_groups::presentation(&s.db, payload.clone()).await?;
-        let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
             .bind(cid)
             .fetch_optional(&s.db)
             .await;

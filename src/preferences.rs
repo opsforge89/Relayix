@@ -175,7 +175,7 @@ impl Preferences {
         }
         if !matches!(
             f.status.as_str(),
-            "" | "sent" | "failed" | "queued" | "processing" | "retrying"
+            "" | "sent" | "failed" | "queued" | "processing" | "retrying" | "cancelled"
         ) {
             return Err(anyhow!("Invalid saved delivery status"));
         }
