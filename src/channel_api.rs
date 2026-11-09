@@ -106,7 +106,7 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
 pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut result =
-        sqlx::query_as::<_, Channel>("SELECT * FROM channels ORDER BY created_at DESC")
+        sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels ORDER BY created_at DESC")
             .fetch_all(&s.db)
             .await
             .map_err(db_error)?;
@@ -296,10 +296,21 @@ pub async fn resume_channel(
     Path(id): Path<Uuid>,
     body: axum::body::Bytes,
 ) -> ApiResult<Value> {
-    let input: ResumeInput = if body.is_empty() { ResumeInput::default() } else {
-        serde_json::from_slice(&body).map_err(|_| err(StatusCode::BAD_REQUEST, "Use backlog: send or cancel"))?
+    let input: ResumeInput = if body.is_empty() {
+        ResumeInput::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| err(StatusCode::BAD_REQUEST, "Use backlog: send or cancel"))?
     };
-    set_manual_pause(&s, &h, id, false, None, matches!(input.backlog, Backlog::Cancel)).await
+    set_manual_pause(
+        &s,
+        &h,
+        id,
+        false,
+        None,
+        matches!(input.backlog, Backlog::Cancel),
+    )
+    .await
 }
 async fn set_manual_pause(
     s: &AppState,
@@ -363,7 +374,9 @@ async fn set_manual_pause(
         }
     }
     tx.commit().await.map_err(db_error)?;
-    Ok(Json(json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled})))
+    Ok(Json(
+        json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled}),
+    ))
 }
 pub(crate) async fn delete_channel(
     State(s): State<AppState>,
@@ -418,7 +431,7 @@ pub(crate) async fn test_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let c = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
         .await

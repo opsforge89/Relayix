@@ -209,7 +209,7 @@ pub async fn channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let c = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
         .await

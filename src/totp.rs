@@ -17,7 +17,11 @@ async fn failed_settings(s: &AppState, h: &HeaderMap, id: Uuid) -> sqlx::Result<
         .bind(id).bind(hash(auth::session_token(h).unwrap_or(""))).execute(&s.db).await?;
     Ok(())
 }
-async fn settings_available(s: &AppState, h: &HeaderMap, id: Uuid) -> std::result::Result<(), (StatusCode, Json<Value>)> {
+async fn settings_available(
+    s: &AppState,
+    h: &HeaderMap,
+    id: Uuid,
+) -> std::result::Result<(), (StatusCode, Json<Value>)> {
     let locked: bool = sqlx::query_scalar("SELECT COALESCE(totp_settings_locked_until>NOW(),false) FROM sessions WHERE user_id=$1 AND token_hash=$2")
         .bind(id).bind(hash(auth::session_token(h).unwrap_or(""))).fetch_one(&s.db).await.map_err(db_error)?;
     if locked {

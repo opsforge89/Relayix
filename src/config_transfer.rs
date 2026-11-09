@@ -170,7 +170,7 @@ pub async fn export(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Bundle
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    let channels: Vec<Channel> = sqlx::query_as("SELECT * FROM channels ORDER BY id LIMIT 501")
+    let channels: Vec<Channel> = sqlx::query_as("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels ORDER BY id LIMIT 501")
         .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;

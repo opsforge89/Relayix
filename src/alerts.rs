@@ -82,7 +82,7 @@ pub async fn list(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<Poli
     auth::require_admin(&h, &s).await?;
     Ok(Json(
         sqlx::query_as::<_, Policy>(
-            "SELECT * FROM alert_policies WHERE owner_user_id IS NULL ORDER BY created_at",
+            "SELECT id,owner_user_id,final_only,name,enabled,watch_channel_ids,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,last_triggered_at,created_at FROM alert_policies WHERE owner_user_id IS NULL ORDER BY created_at",
         )
         .fetch_all(&s.db)
         .await
@@ -140,7 +140,7 @@ pub async fn test(
 ) -> ApiResult<Value> {
     auth::require_admin(&h, &s).await?;
     let policy = sqlx::query_as::<_, Policy>(
-        "SELECT * FROM alert_policies WHERE id=$1 AND owner_user_id IS NULL",
+        "SELECT id,owner_user_id,final_only,name,enabled,watch_channel_ids,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,last_triggered_at,created_at FROM alert_policies WHERE id=$1 AND owner_user_id IS NULL",
     )
     .bind(id)
     .fetch_optional(&s.db)
@@ -235,7 +235,7 @@ async fn account(
 pub async fn personal(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let owner = account(&h, &s).await?;
     let policy: Option<Policy> =
-        sqlx::query_as("SELECT * FROM alert_policies WHERE owner_user_id=$1")
+        sqlx::query_as("SELECT id,owner_user_id,final_only,name,enabled,watch_channel_ids,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,last_triggered_at,created_at FROM alert_policies WHERE owner_user_id=$1")
             .bind(owner)
             .fetch_optional(&s.db)
             .await
@@ -284,14 +284,14 @@ pub async fn save_personal(
             ));
         }
     }
-    let result:Policy=sqlx::query_as("INSERT INTO alert_policies(id,owner_user_id,name,enabled,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,final_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(owner_user_id) WHERE owner_user_id IS NOT NULL DO UPDATE SET enabled=EXCLUDED.enabled,watch_route_ids=EXCLUDED.watch_route_ids,destination_ids=EXCLUDED.destination_ids,failure_threshold=EXCLUDED.failure_threshold,window_minutes=EXCLUDED.window_minutes,cooldown_minutes=EXCLUDED.cooldown_minutes,final_only=EXCLUDED.final_only RETURNING *")
+    let result:Policy=sqlx::query_as("INSERT INTO alert_policies(id,owner_user_id,name,enabled,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,final_only) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(owner_user_id) WHERE owner_user_id IS NOT NULL DO UPDATE SET enabled=EXCLUDED.enabled,watch_route_ids=EXCLUDED.watch_route_ids,destination_ids=EXCLUDED.destination_ids,failure_threshold=EXCLUDED.failure_threshold,window_minutes=EXCLUDED.window_minutes,cooldown_minutes=EXCLUDED.cooldown_minutes,final_only=EXCLUDED.final_only RETURNING id,owner_user_id,final_only,name,enabled,watch_channel_ids,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,last_triggered_at,created_at")
  .bind(Uuid::new_v4()).bind(owner).bind(policy.name).bind(policy.enabled).bind(policy.watch_route_ids).bind(policy.destination_ids).bind(policy.failure_threshold).bind(policy.min_attempts).bind(policy.window_minutes).bind(policy.cooldown_minutes).bind(policy.title).bind(policy.body).bind(policy.final_only).fetch_one(&s.db).await.map_err(db_error)?;
     Ok(Json(json!({"policy":result})))
 }
 pub async fn test_personal(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let owner = account(&h, &s).await?;
     let policy: Policy =
-        sqlx::query_as("SELECT * FROM alert_policies WHERE owner_user_id=$1 AND enabled")
+        sqlx::query_as("SELECT id,owner_user_id,final_only,name,enabled,watch_channel_ids,watch_route_ids,destination_ids,failure_threshold,min_attempts,window_minutes,cooldown_minutes,title,body,last_triggered_at,created_at FROM alert_policies WHERE owner_user_id=$1 AND enabled")
             .bind(owner)
             .fetch_optional(&s.db)
             .await
@@ -394,7 +394,7 @@ async fn schedule(s: &AppState) -> Result<()> {
     let policies:Vec<(Uuid,)>=sqlx::query_as("SELECT id FROM alert_policies p WHERE enabled=true AND (owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u WHERE u.id=p.owner_user_id AND u.enabled))").fetch_all(&s.db).await?;
     for (pid,) in policies {
         let mut tx = s.db.begin().await?;
-        let policy=sqlx::query_as::<_,Policy>("SELECT * FROM alert_policies p WHERE id=$1 AND enabled=true AND (owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u WHERE u.id=p.owner_user_id AND u.enabled)) AND (last_triggered_at IS NULL OR last_triggered_at<=NOW()-cooldown_minutes*INTERVAL '1 minute') FOR UPDATE SKIP LOCKED")
+        let policy=sqlx::query_as::<_,Policy>("SELECT p.id,p.owner_user_id,p.final_only,p.name,p.enabled,p.watch_channel_ids,p.watch_route_ids,p.destination_ids,p.failure_threshold,p.min_attempts,p.window_minutes,p.cooldown_minutes,p.title,p.body,p.last_triggered_at,p.created_at FROM alert_policies p WHERE id=$1 AND enabled=true AND (owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u WHERE u.id=p.owner_user_id AND u.enabled)) AND (last_triggered_at IS NULL OR last_triggered_at<=NOW()-cooldown_minutes*INTERVAL '1 minute') FOR UPDATE SKIP LOCKED")
             .bind(pid).fetch_optional(&mut *tx).await?;
         let Some(policy) = policy else {
             continue;
@@ -480,7 +480,7 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         if !allowed {
             return Ok(Outcome::Disabled);
         }
-        let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
+        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
             .bind(cid)
             .fetch_optional(&s.db)
             .await?;

@@ -117,29 +117,47 @@ impl Schedule {
             if headers.get_all(name).iter().count() > 1 {
                 return Err(anyhow!("Scheduling headers must occur only once"));
             }
-            headers.get(name).map(|v| v.to_str().map(str::trim).map_err(|_| anyhow!("Invalid scheduling header"))).transpose()
+            headers
+                .get(name)
+                .map(|v| {
+                    v.to_str()
+                        .map(str::trim)
+                        .map_err(|_| anyhow!("Invalid scheduling header"))
+                })
+                .transpose()
         }
         let delay = value(headers, "x-relay-delay")?;
         let deliver_at = value(headers, "x-relay-deliver-at")?;
         if delay.is_some() && deliver_at.is_some() {
             return Err(anyhow!("Use X-Relay-Delay or X-Relay-Deliver-At, not both"));
         }
-        let delay = delay.map(|v| {
-            if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(anyhow!("X-Relay-Delay must be 0–2592000 whole seconds"));
-            }
-            v.parse::<i64>().ok().filter(|s| (0..=2592000).contains(s))
-                .ok_or_else(|| anyhow!("X-Relay-Delay must be 0–2592000 whole seconds"))
-        }).transpose()?;
-        let deliver_at = deliver_at.map(|v| DateTime::parse_from_rfc3339(v).map(|at| at.with_timezone(&Utc))
-            .map_err(|_| anyhow!("X-Relay-Deliver-At must be an RFC 3339 timestamp"))).transpose()?;
+        let delay = delay
+            .map(|v| {
+                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(anyhow!("X-Relay-Delay must be 0–2592000 whole seconds"));
+                }
+                v.parse::<i64>()
+                    .ok()
+                    .filter(|s| (0..=2592000).contains(s))
+                    .ok_or_else(|| anyhow!("X-Relay-Delay must be 0–2592000 whole seconds"))
+            })
+            .transpose()?;
+        let deliver_at = deliver_at
+            .map(|v| {
+                DateTime::parse_from_rfc3339(v)
+                    .map(|at| at.with_timezone(&Utc))
+                    .map_err(|_| anyhow!("X-Relay-Deliver-At must be an RFC 3339 timestamp"))
+            })
+            .transpose()?;
         Ok(Self { delay, deliver_at })
     }
     pub fn explicit(&self) -> bool {
         self.delay.is_some() || self.deliver_at.is_some()
     }
     pub fn requested_time(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-        let at = self.deliver_at.unwrap_or_else(|| now + chrono::Duration::seconds(self.delay.unwrap_or(0)));
+        let at = self
+            .deliver_at
+            .unwrap_or_else(|| now + chrono::Duration::seconds(self.delay.unwrap_or(0)));
         if at > now + chrono::Duration::days(30) {
             return Err(anyhow!("Schedule notifications at most 30 days ahead"));
         }
@@ -193,24 +211,57 @@ mod tests {
         let now = at("2026-11-09T12:00:00Z");
         let mut headers = HeaderMap::new();
         headers.insert("x-relay-delay", "60".parse().unwrap());
-        assert_eq!(Schedule::parse(&headers).unwrap().requested_time(now).unwrap(), now + chrono::Duration::minutes(1));
+        assert_eq!(
+            Schedule::parse(&headers)
+                .unwrap()
+                .requested_time(now)
+                .unwrap(),
+            now + chrono::Duration::minutes(1)
+        );
         for value in ["-1", "2592001", "1.5", "5m", ""] {
             headers.insert("x-relay-delay", value.parse().unwrap());
             assert!(Schedule::parse(&headers).is_err());
         }
         headers.insert("x-relay-delay", "1".parse().unwrap());
-        headers.insert("x-relay-deliver-at", "2026-11-09T13:00:00Z".parse().unwrap());
+        headers.insert(
+            "x-relay-deliver-at",
+            "2026-11-09T13:00:00Z".parse().unwrap(),
+        );
         assert!(Schedule::parse(&headers).is_err());
         headers.remove("x-relay-delay");
         headers.insert("x-relay-deliver-at", "invalid".parse().unwrap());
         assert!(Schedule::parse(&headers).is_err());
-        headers.insert("x-relay-deliver-at", "2026-12-10T12:00:00Z".parse().unwrap());
-        assert!(Schedule::parse(&headers).unwrap().requested_time(now).is_err());
-        headers.insert("x-relay-deliver-at", "2026-11-08T12:00:00Z".parse().unwrap());
-        assert_eq!(Schedule::parse(&headers).unwrap().requested_time(now).unwrap(), now);
-        headers.append("x-relay-deliver-at", "2026-11-09T13:00:00Z".parse().unwrap());
+        headers.insert(
+            "x-relay-deliver-at",
+            "2026-12-10T12:00:00Z".parse().unwrap(),
+        );
+        assert!(Schedule::parse(&headers)
+            .unwrap()
+            .requested_time(now)
+            .is_err());
+        headers.insert(
+            "x-relay-deliver-at",
+            "2026-11-08T12:00:00Z".parse().unwrap(),
+        );
+        assert_eq!(
+            Schedule::parse(&headers)
+                .unwrap()
+                .requested_time(now)
+                .unwrap(),
+            now
+        );
+        headers.append(
+            "x-relay-deliver-at",
+            "2026-11-09T13:00:00Z".parse().unwrap(),
+        );
         assert!(Schedule::parse(&headers).is_err());
         headers.clear();
-        assert_eq!(Schedule::parse(&headers).unwrap().requested_time(now).unwrap(), now);
+        assert_eq!(
+            Schedule::parse(&headers)
+                .unwrap()
+                .requested_time(now)
+                .unwrap(),
+            now
+        );
     }
 }

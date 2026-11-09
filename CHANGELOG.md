@@ -2,6 +2,8 @@
 
 ## 0.9.1 Beta — 2026-11-09
 
+- Use explicit database result columns so additive schema changes do not invalidate cached SELECT/RETURNING result shapes.
+
 - Move explicit webhook schedules to X-Relay-Delay/X-Relay-Deliver-At headers, preserving arbitrary JSON source fields and schedule-aware idempotency.
 - Explain that every non-urgent deduplicated event, including a unique message, waits until its fixed grouping window closes.
 - Add an explicit resume choice to send or cancel the complete queued notification/alert backlog, retaining incoming events and attempt history.

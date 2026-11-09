@@ -184,7 +184,8 @@ async fn enqueue(
         err(StatusCode::BAD_REQUEST, message)
     })?;
     let now = chrono::Utc::now();
-    let requested = schedule.requested_time(now)
+    let requested = schedule
+        .requested_time(now)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let policy =
         crate::delivery_policy::Settings::parse(&endpoint.delivery_settings).map_err(|_| {
@@ -194,7 +195,11 @@ async fn enqueue(
             )
         })?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let payload_hash = hash(&if schedule.explicit() { json!({"payload":payload,"schedule":schedule}).to_string() } else { payload.to_string() });
+    let payload_hash = hash(&if schedule.explicit() {
+        json!({"payload":payload,"schedule":schedule}).to_string()
+    } else {
+        payload.to_string()
+    });
     if let Some(ref key_hash) = idempotency {
         // Serialize requests with the same route/key, including concurrent retries.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
@@ -245,7 +250,7 @@ async fn enqueue(
     let mut template_result: Option<Value> = None;
     if let Some(id) = endpoint.template_id {
         if let Some(template) = sqlx::query_as::<_, crate::templates::Template>(
-            "SELECT * FROM message_templates WHERE id=$1",
+            "SELECT id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field,version,created_at,updated_at FROM message_templates WHERE id=$1",
         )
         .bind(id)
         .fetch_optional(&mut *tx)
@@ -293,10 +298,7 @@ async fn enqueue(
         .unwrap();
         scheduled_at = policy.allowed_at(scheduled_at.max(closes), event.priority);
     }
-    if policy.quiet_enabled
-        || grouping.is_some()
-        || schedule.explicit()
-    {
+    if policy.quiet_enabled || grouping.is_some() || schedule.explicit() {
         routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
     }
     if let Some(role) = preview_role {
@@ -316,7 +318,7 @@ async fn enqueue(
         if would_queue > 0 {
             routing["reason"] = json!("would_queue");
         }
-        let channels: Vec<Channel> = sqlx::query_as("SELECT c.* FROM channels c WHERE EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id) ORDER BY LOWER(c.name),c.id")
+        let channels: Vec<Channel> = sqlx::query_as("SELECT c.id,c.name,c.kind,c.config,c.enabled,c.manual_paused,c.manual_pause_until,c.created_at FROM channels c WHERE EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id) ORDER BY LOWER(c.name),c.id")
             .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
         let presentations = channels.into_iter().map(|c| {
             let presentation = message::preview(&c.kind, &c.config, &event.title, &event.message, event.priority, role=="admin")
@@ -515,7 +517,8 @@ async fn ingest_inner(
             Some(hash(value))
         }
     };
-    let schedule = crate::delivery_policy::Schedule::parse(&headers).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let schedule = crate::delivery_policy::Schedule::parse(&headers)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     enqueue(&s, endpoint, payload, false, None, idempotency, schedule).await
 }
 
@@ -530,7 +533,8 @@ pub async fn test_route(
         "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Route not found"))?;
-    let schedule = crate::delivery_policy::Schedule::parse(&headers).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let schedule = crate::delivery_policy::Schedule::parse(&headers)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     enqueue(&s, endpoint, payload, true, None, None, schedule).await
 }
 
@@ -543,8 +547,18 @@ pub async fn preview_route(
     let principal = auth::authenticated(&headers, &s).await?;
     let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(||err(StatusCode::NOT_FOUND,"Route not found"))?;
-    let schedule = crate::delivery_policy::Schedule::parse(&headers).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    enqueue(&s, endpoint, payload, true, Some(&principal.role), None, schedule).await
+    let schedule = crate::delivery_policy::Schedule::parse(&headers)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    enqueue(
+        &s,
+        endpoint,
+        payload,
+        true,
+        Some(&principal.role),
+        None,
+        schedule,
+    )
+    .await
 }
 
 #[cfg(test)]
