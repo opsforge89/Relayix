@@ -312,6 +312,26 @@ pub async fn resume_channel(
     )
     .await
 }
+pub async fn channel_backlog(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Value> {
+    auth::require_admin(&h, &s).await?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM channels WHERE id=$1)")
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .map_err(db_error)?;
+    if !exists {
+        return Err(err(StatusCode::NOT_FOUND, "Channel not found"));
+    }
+    let (messages, deliveries, alerts): (i64, i64, i64) = sqlx::query_as("SELECT COALESCE(SUM(COALESCE(g.occurrences,1)),0)::bigint,COUNT(*)::bigint,(SELECT COUNT(*) FROM alert_deliveries WHERE channel_id=$1 AND status='queued') FROM deliveries d JOIN events e ON e.id=d.event_id LEFT JOIN event_groups g ON g.id=e.group_id WHERE d.channel_id=$1 AND d.status='queued'")
+        .bind(id).fetch_one(&s.db).await.map_err(db_error)?;
+    Ok(Json(
+        json!({"messages":messages+alerts,"notification_messages":messages,"alert_messages":alerts,"deliveries":deliveries+alerts}),
+    ))
+}
 async fn set_manual_pause(
     s: &AppState,
     h: &HeaderMap,
@@ -321,6 +341,12 @@ async fn set_manual_pause(
     cancel_backlog: bool,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(h, s).await?;
+    if cancel_backlog && actor.role != "admin" {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Administrator required to cancel queued deliveries",
+        ));
+    }
     if until
         .is_some_and(|date| date <= Utc::now() || date > Utc::now() + chrono::Duration::days(365))
     {
@@ -348,13 +374,14 @@ async fn set_manual_pause(
         .await
         .map_err(db_error)?;
     let mut cancelled = 0;
+    let mut cancelled_messages = 0;
     if cancel_backlog {
-        for query in [
-            "UPDATE deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued'",
-            "UPDATE alert_deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued'",
-        ] {
-            cancelled += sqlx::query(query).bind(id).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
-        }
+        let (deliveries, messages): (i64, i64) = sqlx::query_as("WITH cancelled AS (UPDATE deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued' RETURNING event_id) SELECT COUNT(*)::bigint,COALESCE(SUM(COALESCE(g.occurrences,1)),0)::bigint FROM cancelled d JOIN events e ON e.id=d.event_id LEFT JOIN event_groups g ON g.id=e.group_id")
+            .bind(id).fetch_one(&mut *tx).await.map_err(db_error)?;
+        let alerts = sqlx::query("UPDATE alert_deliveries SET status='cancelled',locked_at=NULL,error='Cancelled by user on channel resume',error_category='cancelled' WHERE channel_id=$1 AND status='queued'")
+            .bind(id).execute(&mut *tx).await.map_err(db_error)?.rows_affected() as i64;
+        cancelled = deliveries + alerts;
+        cancelled_messages = messages + alerts;
     }
     if !paused {
         sqlx::query("DELETE FROM channel_health WHERE channel_id=$1")
@@ -375,7 +402,7 @@ async fn set_manual_pause(
     }
     tx.commit().await.map_err(db_error)?;
     Ok(Json(
-        json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled}),
+        json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled,"cancelled_messages":cancelled_messages}),
     ))
 }
 pub(crate) async fn delete_channel(

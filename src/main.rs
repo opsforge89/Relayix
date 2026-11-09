@@ -299,6 +299,7 @@ async fn main() -> Result<()> {
         .route("/channels/{id}/test", post(test_channel))
         .route("/channels/{id}/pause", post(pause_channel))
         .route("/channels/{id}/resume", post(resume_channel))
+        .route("/channels/{id}/backlog", get(channel_backlog))
         .route("/channels/{id}/diagnose", post(diagnostics::channel))
         .route("/routes", get(routes).post(create_route))
         .route(

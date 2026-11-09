@@ -35,7 +35,7 @@ services:
     networks:
       default:
         aliases: [relayix.test]
-    image: ${RELAYIX_TEST_IMAGE:-relayix:0.9.1}
+    image: ${RELAYIX_TEST_IMAGE:-relayix:0.9.2}
     environment:
       DATABASE_URL: postgres://relayix:${RELAYIX_TEST_POSTGRES_PASSWORD:?generated test runtime required}@db:5432/relayix
       ADMIN_TOKEN: ${RELAYIX_TEST_ADMIN_TOKEN:?generated test runtime required}
@@ -52,7 +52,7 @@ services:
       proxy:
         condition: service_started
   checks:
-    image: ${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.9.1}
+    image: ${RELAYIX_TEST_CHECKS_IMAGE:-relayix-checks:0.9.2}
     environment:
       RELAYIX_TEST_CREDENTIALS_FILE: /run/relayix-test/credentials.json
       RELAYIX_TEST_BASE_URL: ${RELAYIX_TEST_BASE_URL:?generated test runtime required}
@@ -72,7 +72,7 @@ services:
     environment:
       RELAYIX_TEST_CREDENTIALS_FILE: /run/relayix-test/credentials.json
       RELAYIX_TEST_BASE_URL: ${RELAYIX_TEST_BASE_URL:?generated test runtime required}
-    image: ${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.9.1}
+    image: ${RELAYIX_TEST_BROWSER_IMAGE:-relayix-browser:0.9.2}
     volumes:
       - ${RELAYIX_TEST_RUNTIME_DIR:?generated test runtime required}:/run/relayix-test:ro
       - ./:/tests:ro

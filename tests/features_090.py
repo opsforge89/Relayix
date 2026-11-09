@@ -59,6 +59,10 @@ try:
     path='/controls090-'+suffix
     channel=ok('/api/channels',{'name':'090 controls','kind':'webhook','config':{'url':'http://mock:8000'+path}})['id'];channels.append(channel)
     r=route(channel)
+    member_name='queue-member-'+suffix
+    member=ok('/api/users',{'username':member_name,'display_name':'Queue member','role':'member','password':credentials['operator_password']})['id'];users.append(member)
+    owner=ok('/api/users',{'username':'queue-owner-'+suffix,'display_name':'Alert owner','role':'member','password':credentials['operator_password']})['id'];users.append(owner)
+    status,_,member_session=session(member_name,credentials['operator_password']);assert status==200
     assert 'delivery_policy' not in ok('/api/routes/'+r['id']+'/preview',{'message':'Immediate preview'})['routing']
     before=ok('/api/events?route_id='+r['id'])['total']
     scheduled_preview=ok('/api/routes/'+r['id']+'/preview',{'message':'Scheduled preview'},headers={'X-Relay-Delay':'60'})
@@ -74,7 +78,7 @@ try:
     saved=next(c for c in ok('/api/channels') if c['id']==channel)
     ok('/api/channels/'+channel,saved,'PUT')
     assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
-    ok('/api/channels/'+channel+'/resume',method='POST')
+    ok('/api/channels/'+channel+'/resume',method='POST',headers=member_session)
     wait(lambda:rows(r)[0]['status']=='sent')
     wait(lambda:sql(f"SELECT status FROM alert_deliveries WHERE policy_id='{policy}'")=='sent')
     future=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=4)).isoformat()
@@ -106,7 +110,16 @@ try:
     ok('/api/alert-policies/'+policy+'/test',{},'POST')
     assert request('/api/channels/'+channel+'/resume',{'backlog':'invalid'},'POST')[0]==400
     assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
+    personal_alert=str(uuid.uuid4())
+    sql(f"INSERT INTO alert_deliveries(id,channel_id,owner_user_id,title,message) VALUES('{personal_alert}','{channel}','{owner}','Other user alert','Retain this alert')")
+    assert request('/api/channels/'+channel+'/resume',{'backlog':'cancel'},'POST',member_session)[0]==403
+    assert request('/api/channels/'+channel+'/backlog',headers=member_session)[0]==403
+    assert sql(f"SELECT status FROM alert_deliveries WHERE id='{personal_alert}'")=='queued'
+    assert next(c for c in ok('/api/channels') if c['id']==channel)['manual_paused']
+    preview=ok('/api/channels/'+channel+'/backlog')
     resumed=ok('/api/channels/'+channel+'/resume',{'backlog':'cancel'},'POST')
+    assert resumed['cancelled_messages']==preview['messages']==preview['deliveries']
+    assert sql(f"SELECT status FROM alert_deliveries WHERE id='{personal_alert}'")=='cancelled'
     assert resumed['cancelled']>=3
     assert next(d for d in rows(r) if d['event_id']==cancelled_event['event_id'])['status']=='cancelled'
     assert next(d for d in rows(r) if d['event_id']==scheduled['event_id'])['status']=='cancelled'
@@ -150,6 +163,24 @@ try:
     wait(lambda:all(d['status']=='sent' for d in rows(digest)))
     assert any(p.get('title')=='Digest · 2 notifications' and 'First summary' in p['message'] and 'Second summary' in p['message'] for p in received(path))
     exported=ok('/api/config/export');assert next(item for item in exported['routes'] if item['key']==digest['id'])['delivery_settings']['digest_seconds']==3600
+
+    # A queued group represents all of its original events, not just the leader.
+    grouped_channel=ok('/api/channels',{'name':'Grouped cancellation','kind':'webhook','config':{'url':'http://mock:8000/group-cancel-'+suffix}})['id'];channels.append(grouped_channel)
+    ok('/api/channels/'+grouped_channel+'/pause',{})
+    if time.time()%300>295:time.sleep(301-time.time()%300)
+    grouped_dedup=route(grouped_channel,{'dedup_seconds':300})
+    for _ in range(3):send(grouped_dedup,{'message':'Grouped cancellation repeat'})
+    grouped_digest=route(grouped_channel,{'digest_seconds':3600})
+    for text in ['Digest one','Digest two']:send(grouped_digest,{'message':text,'priority':1})
+    ungrouped=route(grouped_channel);send(ungrouped,{'message':'Standalone cancellation'})
+    sql(f"INSERT INTO alert_deliveries(id,channel_id,owner_user_id,title,message) VALUES('{uuid.uuid4()}','{grouped_channel}','{owner}','Other user grouped alert','Queued alert')")
+    preview=ok('/api/channels/'+grouped_channel+'/backlog')
+    assert preview=={'messages':7,'notification_messages':6,'alert_messages':1,'deliveries':4},preview
+    cancelled=ok('/api/channels/'+grouped_channel+'/resume',{'backlog':'cancel'},'POST')
+    assert cancelled['cancelled']==4 and cancelled['cancelled_messages']==7
+    assert ok('/api/events?route_id='+grouped_dedup['id'])['total']==3
+    assert ok('/api/events?route_id='+grouped_digest['id'])['total']==2
+    assert all(d['status']=='cancelled' for d in rows(grouped_dedup)+rows(grouped_digest)+rows(ungrouped))
 
     username='totp-'+suffix
     user=ok('/api/users',{'username':username,'display_name':'TOTP member regression','role':'member','password':credentials['operator_password']})['id'];users.append(user)

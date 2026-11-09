@@ -35,9 +35,10 @@ with sync_playwright() as p:
         card.get_by_role('button',name='Pause',exact=True).click();page.get_by_role('dialog',name='Pause channel',exact=True).get_by_role('button',name='Pause channel',exact=True).click()
         pending=ok(api.post(route['endpoint'],data={'message':'Cancel UI backlog'},headers={'X-Relay-Key':route['token']}))
         card.get_by_role('button',name='Resume',exact=True).click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
-        resume.get_by_label('Queued deliveries',exact=True).select_option('cancel');expect(resume).to_contain_text('including future scheduled deliveries')
-        resume.get_by_role('button',name='Cancel queued deliveries and resume',exact=True).click();expect(resume).not_to_be_visible();expect(card).not_to_contain_text('Paused manually')
-        assert ok(api.get('/api/deliveries?event_id='+pending['event_id']))['items'][0]['status']=='cancelled'
+        expect(resume.get_by_role('option',name='Cancel all queued deliveries',exact=True)).to_have_count(0)
+        expect(resume).to_contain_text('Only administrators can cancel queued messages')
+        resume.get_by_role('button',name='Cancel',exact=True).click()
+        assert ok(api.get('/api/deliveries?event_id='+pending['event_id']))['items'][0]['status']=='queued'
         nav('Routes');page.get_by_role('button',name='Edit route 090 UI route',exact=True).click();editor=page.get_by_role('dialog',name='Edit route',exact=True)
         expect(editor).to_contain_text('including a unique one');editor.get_by_label('Quiet hours',exact=True).check();editor.get_by_label('Quiet-hours timezone',exact=True).fill('Europe/Moscow');editor.get_by_label('Deduplication window (seconds)',exact=True).fill('60');editor.get_by_label('Digest interval',exact=True).select_option('3600')
         editor.get_by_role('button',name='Save',exact=True).click();expect(editor).not_to_be_visible()
@@ -61,6 +62,20 @@ with sync_playwright() as p:
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible();nav('Settings');security=page.locator('.totp-settings')
         security.locator('summary').filter(has_text='Disable two-factor authentication').click();security.get_by_label('Current password to disable two-factor',exact=True).fill(credentials['operator_password']);security.get_by_label('Authenticator or recovery code',exact=True).fill(recovery[1]);security.get_by_role('button',name='Disable two-factor authentication',exact=True).click()
         expect(security.get_by_role('status')).to_have_text('Two-factor authentication disabled')
+        # An administrator sees the full grouped-message count before cancellation.
+        grouped=ok(api.post('/api/routes',data={'name':'UI cancellation group','channel_ids':[channel],'delivery_settings':{'dedup_seconds':300}}));routes.append(grouped['id'])
+        if time.time()%300>295:time.sleep(301-time.time()%300)
+        for _ in range(2):ok(api.post(grouped['endpoint'],data={'message':'Grouped UI backlog'},headers={'X-Relay-Key':grouped['token']}))
+        administrator='cancel-admin-'+suffix
+        users.append(ok(api.post('/api/users',data={'username':administrator,'display_name':'Cancellation administrator','role':'admin','password':credentials['operator_password']}))['id'])
+        page.locator('.settings-actions').get_by_role('button',name='Sign out',exact=True).click()
+        page.get_by_label('Username',exact=True).fill(administrator);page.get_by_label('Password',exact=True).fill(credentials['operator_password']);page.get_by_role('button',name='Sign in',exact=True).click()
+        expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible();nav('Channels')
+        card.get_by_role('button',name='Resume',exact=True).click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
+        expect(resume.get_by_role('status')).to_contain_text('3 messages in 2 queued deliveries')
+        resume.get_by_label('Queued deliveries',exact=True).select_option('cancel');expect(resume).to_contain_text('every original message in grouped deliveries')
+        resume.get_by_role('button',name='Cancel 3 messages and resume',exact=True).click();expect(resume).not_to_be_visible();expect(card).not_to_contain_text('Paused manually')
+        assert ok(api.get('/api/deliveries?event_id='+pending['event_id']))['items'][0]['status']=='cancelled'
         assert not errors,errors
         print('PASS: pause/resume UI, quiet/grouping settings, Python/Bash examples and explicit TOTP enrollment, recovery login and disable',flush=True)
     finally:

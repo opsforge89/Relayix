@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 Beta — 2026-11-09
+
+- Restrict cancelling a channel's queued notifications and alerts to administrators; members can still pause and resume with sending.
+- Expire cancelled alert deliveries under the same retention policy and bounded sweep as sent/failed alerts, while preserving recent and pending work.
+- Show original message counts, including every grouped event and queued alert, before backlog cancellation and report grouped message totals on completion.
+
 ## 0.9.1 Beta — 2026-11-09
 
 - Use explicit database result columns so additive schema changes do not invalidate cached SELECT/RETURNING result shapes.
