@@ -48,7 +48,7 @@ with sync_playwright() as p:
         security.get_by_label('Authenticator confirmation code',exact=True).fill(otp(key));security.get_by_role('button',name='Enable two-factor authentication',exact=True).click()
         expect(security.get_by_role('status')).to_have_text('Two-factor authentication enabled')
         recovery=security.get_by_label('One-time recovery codes').locator('pre').inner_text().splitlines();assert len(recovery)==10
-        security.get_by_role('button',name='I saved the recovery codes',exact=True).click();page.reload();expect(page.locator('.totp-settings').get_by_role('status')).to_have_text('Two-factor authentication enabled')
+        security.get_by_role('button',name='I saved the recovery codes',exact=True).click();page.reload();expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible();nav('Settings');expect(page.locator('.totp-settings').get_by_role('status')).to_have_text('Two-factor authentication enabled')
         page.locator('.settings-actions').get_by_role('button',name='Sign out',exact=True).click()
         page.get_by_label('Username',exact=True).fill(username);page.get_by_label('Password',exact=True).fill(credentials['operator_password']);page.get_by_label('Authenticator or recovery code (if enabled)',exact=True).fill(recovery[0]);page.get_by_role('button',name='Sign in',exact=True).click()
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible();nav('Settings');security=page.locator('.totp-settings')
