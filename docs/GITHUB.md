@@ -10,7 +10,7 @@ The local origin is connected to https://github.com/opsforge89/Relayix.git and b
 git remote -v  # origin: https://github.com/opsforge89/Relayix.git
 git add .
 git diff --cached --stat
-git commit -m "Prepare Relayix 0.9.0 Beta"
+git commit -m "Prepare Relayix 0.9.1 Beta"
 git push -u origin main
 ```
 

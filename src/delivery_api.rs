@@ -52,7 +52,7 @@ pub(crate) fn normalize_delivery_filter(
     if filter
         .status
         .as_deref()
-        .map(|v| !matches!(v, "sent" | "failed" | "queued" | "processing" | "retrying"))
+        .map(|v| !matches!(v, "sent" | "failed" | "queued" | "processing" | "retrying" | "cancelled"))
         .unwrap_or(false)
     {
         return Err(err(StatusCode::BAD_REQUEST, "Invalid delivery status"));

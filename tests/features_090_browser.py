@@ -1,4 +1,4 @@
-"""All delivery controls and opt-in administrator TOTP are visible and usable in Chromium."""
+"""All delivery controls and opt-in member TOTP are visible and usable in Chromium."""
 import base64
 import hashlib
 import hmac
@@ -23,7 +23,7 @@ with sync_playwright() as p:
     suffix=uuid.uuid4().hex
     try:
         username='controls-'+suffix
-        users.append(ok(api.post('/api/users',data={'username':username,'display_name':'Controls administrator','role':'admin','password':credentials['operator_password']}))['id'])
+        users.append(ok(api.post('/api/users',data={'username':username,'display_name':'Controls member','role':'member','password':credentials['operator_password']}))['id'])
         channel=ok(api.post('/api/channels',data={'name':'090 UI channel','kind':'webhook','config':{'url':'http://mock:8000/ui090-'+suffix}}))['id'];channels.append(channel)
         route=ok(api.post('/api/routes',data={'name':'090 UI route','channel_ids':[channel]}));routes.append(route['id'])
         page.goto(BASE);page.get_by_label('Username',exact=True).fill(username);page.get_by_label('Password',exact=True).fill(credentials['operator_password']);page.get_by_role('button',name='Sign in',exact=True).click()
@@ -31,9 +31,9 @@ with sync_playwright() as p:
         nav('Channels');card=page.locator('.channel-entry').filter(has=page.get_by_text('090 UI channel',exact=True))
         card.get_by_role('button',name='Pause',exact=True).click();dialog=page.get_by_role('dialog',name='Pause channel',exact=True)
         dialog.get_by_label('Pause duration',exact=True).select_option('0');dialog.get_by_role('button',name='Pause channel',exact=True).click()
-        expect(card).to_contain_text('Paused manually');card.get_by_role('button',name='Resume',exact=True).click();expect(card).not_to_contain_text('Paused manually')
+        expect(card).to_contain_text('Paused manually');card.get_by_role('button',name='Resume',exact=True).click();page.get_by_role('dialog',name='Resume channel',exact=True).get_by_role('button',name='Resume channel',exact=True).click();expect(card).not_to_contain_text('Paused manually')
         nav('Routes');page.get_by_role('button',name='Edit route 090 UI route',exact=True).click();editor=page.get_by_role('dialog',name='Edit route',exact=True)
-        editor.get_by_label('Quiet hours',exact=True).check();editor.get_by_label('Quiet-hours timezone',exact=True).fill('Europe/Moscow');editor.get_by_label('Deduplication window (seconds)',exact=True).fill('60');editor.get_by_label('Digest interval',exact=True).select_option('3600')
+        expect(editor).to_contain_text('including a unique one');editor.get_by_label('Quiet hours',exact=True).check();editor.get_by_label('Quiet-hours timezone',exact=True).fill('Europe/Moscow');editor.get_by_label('Deduplication window (seconds)',exact=True).fill('60');editor.get_by_label('Digest interval',exact=True).select_option('3600')
         editor.get_by_role('button',name='Save',exact=True).click();expect(editor).not_to_be_visible()
         saved=next(r for r in ok(api.get('/api/routes')) if r['id']==route['id'])
         assert saved['delivery_settings']['quiet_enabled'] and saved['delivery_settings']['dedup_seconds']==60 and saved['delivery_settings']['digest_seconds']==3600

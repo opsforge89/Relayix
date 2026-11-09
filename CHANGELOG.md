@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 Beta — 2026-11-09
+
+- Move explicit webhook schedules to X-Relay-Delay/X-Relay-Deliver-At headers, preserving arbitrary JSON source fields and schedule-aware idempotency.
+- Explain that every non-urgent deduplicated event, including a unique message, waits until its fixed grouping window closes.
+- Add an explicit resume choice to send or cancel the complete queued notification/alert backlog, retaining incoming events and attempt history.
+- Offer opt-in TOTP to member accounts and isolate security-settings throttling per session so stolen sessions cannot lock the account's sign-in factor.
+- Document the full API authority of ADMIN_TOKEN and the unencrypted storage of authenticator/channel secrets.
+
 ## 0.9.0 Beta — 2026-11-09
 
 - Add manual channel pause/resume with optional expiry, retaining queued notifications and alerts. Resume also resets automatic cooldowns.
