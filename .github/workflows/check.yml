@@ -83,7 +83,7 @@ jobs:
           python3 tests/candidate_image.py
       - name: Audit Rust dependencies
         run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src rust:1.99.1-trixie sh -c 'cargo install cargo-audit --version 0.22.2 --locked && cargo audit'
+          docker run --rm -v "$PWD:/src:ro" -w /src rust:1.99.1-trixie sh -c 'cargo install cargo-deny --version 0.20.2 --locked && cargo deny --locked check advisories bans'
       - name: Scan runtime image
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.70.0 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed relayix:ci
       - name: API, SMTP and Chromium integration tests

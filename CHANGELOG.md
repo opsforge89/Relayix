@@ -11,6 +11,7 @@
 - Cap provider-supplied retry delays at 24 hours across HTTP headers/dates, Matrix JSON and Telegram transports.
 - Clear channel cooldowns and release queued retry deadlines atomically after a successful channel save, preserving attempt history.
 - Count channel failures toward automatic pauses; retain individual message rejection errors without pausing healthy traffic or losing alert error details.
+- Audit the active Rust dependency graph against RustSec with cargo-deny and forbid unused SQLite/MySQL drivers, while retaining the full pre-publication verification gate.
 
 ## 0.8.8 Beta — 2026-11-08
 

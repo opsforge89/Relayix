@@ -1,0 +1,17 @@
+# Audit every active dependency, including build/dev and target-specific dependencies.
+# Cargo.lock also retains optional SQLx drivers that are never compiled by Relayix.
+[graph]
+all-features = false
+exclude-dev = false
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+ignore = []
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "libsqlite3-sys", reason = "Relayix supports PostgreSQL only" },
+    { crate = "sqlx-sqlite", reason = "Relayix supports PostgreSQL only" },
+    { crate = "sqlx-mysql", reason = "Relayix supports PostgreSQL only" },
+]
