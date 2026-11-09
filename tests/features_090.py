@@ -59,6 +59,11 @@ try:
     path='/controls090-'+suffix
     channel=ok('/api/channels',{'name':'090 controls','kind':'webhook','config':{'url':'http://mock:8000'+path}})['id'];channels.append(channel)
     r=route(channel)
+    assert 'delivery_policy' not in ok('/api/routes/'+r['id']+'/preview',{'message':'Immediate preview'})['routing']
+    before=ok('/api/events?route_id='+r['id'])['total']
+    scheduled_preview=ok('/api/routes/'+r['id']+'/preview',{'message':'Scheduled preview','delay':60})
+    assert scheduled_preview['routing']['delivery_policy']['not_before']
+    assert ok('/api/events?route_id='+r['id'])['total']==before
     assert request('/api/channels/'+channel+'/pause',{},headers={'Authorization':''})[0]==401
     ok('/api/channels/'+channel+'/pause',{})
     first=send(r,{'message':'Retained during vacation'})
