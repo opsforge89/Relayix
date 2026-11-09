@@ -496,12 +496,10 @@ async fn send_inner(
                 ("message", rendered.body.as_str()),
             ]),
         Config::Discord { url } => client.post(url).json(&json!({"content":text})),
-        Config::Webhook { url } => client.post(url).json(&webhook_body::render(
-            cfg.get("body_template"),
-            title,
-            message,
-            priority,
-        ).map_err(|_|retry_policy::transport("message",true,None))?),
+        Config::Webhook { url } => client.post(url).json(
+            &webhook_body::render(cfg.get("body_template"), title, message, priority)
+                .map_err(|_| retry_policy::transport("message", true, None))?,
+        ),
         Config::Mattermost { url }
         | Config::Slack { url }
         | Config::Teams { url }
@@ -512,7 +510,11 @@ async fn send_inner(
         }
     };
     let response = request.send().await.map_err(|error| {
-        if error.is_builder() {retry_policy::transport("message",true,None)} else {anyhow!(error.without_url())}
+        if error.is_builder() {
+            retry_policy::transport("message", true, None)
+        } else {
+            anyhow!(error.without_url())
+        }
     })?;
     retry_policy::response(response).await?;
     Ok(())
