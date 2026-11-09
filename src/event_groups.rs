@@ -12,11 +12,17 @@ pub async fn find(
     let row:Option<(Uuid,Uuid)>=sqlx::query_as("SELECT id,leader_event_id FROM event_groups WHERE route_id=$1 AND group_key=$2 AND closes_at>clock_timestamp() AND (kind='dedup' OR occurrences<50) ORDER BY created_at DESC LIMIT 1 FOR UPDATE")
         .bind(route).bind(group_key).fetch_optional(&mut **tx).await?;
     let Some((id,leader))=row else{return Ok(None)};
-    // Lock all leader deliveries before checking eligibility; claimers never lock group rows.
-    let deliveries:Vec<(String,i32)>=sqlx::query_as("SELECT status,attempts FROM deliveries WHERE event_id=$1 ORDER BY id FOR UPDATE")
+    // Ingestion and claims share the advisory lock; finishers do not change attempt counts.
+    let deliveries:Vec<(String,i32)>=sqlx::query_as("SELECT status,attempts FROM deliveries WHERE event_id=$1 ORDER BY id")
         .bind(leader).fetch_all(&mut **tx).await?;
     if deliveries.is_empty() || deliveries.iter().any(|(status,attempts)|status!="queued" || *attempts!=0) { return Ok(None); }
     Ok(Some(Window{id,leader}))
+}
+pub async fn try_claim(tx:&mut sqlx::Transaction<'_,sqlx::Postgres>,payload:&Value)->Result<bool>{
+    let Some(key)=payload["__relayix_group_key"].as_str() else{return Ok(true)};
+    let route=payload["__relayix_route_id"].as_str().unwrap_or("");
+    sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!("group:{route}:{key}")).fetch_one(&mut **tx).await.map_err(Into::into)
 }
 pub async fn presentation(db:&PgPool, mut payload:Value)->Result<Value> {
     let group=payload.as_object_mut().and_then(|p|p.remove("__relayix_group"));

@@ -83,7 +83,7 @@ Current interface with fictional demonstration data.
 
 ## Documentation
 
-[Integration capabilities and limits](docs/REFERENCE.md#integration-capabilities-and-message-limits) · [Message previews](docs/REFERENCE.md#message-previews) · [Retries and channel recovery](docs/REFERENCE.md#retries-and-channel-recovery)
+[Integration capabilities and limits](docs/REFERENCE.md#integration-capabilities-and-message-limits) · [Delivery controls](docs/REFERENCE.md#delivery-controls) · [Optional TOTP](docs/REFERENCE.md#optional-administrator-two-factor-authentication) · [Message previews](docs/REFERENCE.md#message-previews) · [Retries and channel recovery](docs/REFERENCE.md#retries-and-channel-recovery)
 
 [Setup](docs/DEPLOYMENT.md) · [User guide and API](docs/REFERENCE.md) · [Proxies](docs/PROXIES.md) · [GitHub and CI](docs/GITHUB.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 

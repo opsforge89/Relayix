@@ -43,6 +43,7 @@ pub fn transport(category: &'static str, permanent: bool, delay: Option<i32>) ->
             "authentication" => "Credentials rejected; update channel credentials",
             "destination" => "Destination rejected; check recipient and permissions",
             "rate_limit" => "Provider rate limit; waiting before retry",
+            "message" => "Message cannot be sent; check its content and template size",
             _ => "Temporary transport failure; check connectivity and server availability",
         },
     }
@@ -146,7 +147,7 @@ pub fn plan(error: &anyhow::Error, attempt: i32, base: i32) -> Plan {
     let affects_channel = failure.is_none_or(|f| match f.status {
         Some(401 | 403 | 408 | 429 | 500..=599) => true,
         Some(_) => false,
-        None => f.category != "destination",
+        None => !matches!(f.category, "destination" | "message"),
     });
     let category = failure.map(|f| f.category).unwrap_or("temporary");
     Plan {
@@ -220,6 +221,7 @@ mod tests {
         assert!(plan(&anyhow!("Connection failed"), 3, 5).affects_channel);
         assert!(plan(&transport("authentication", true, None), 3, 5).affects_channel);
         assert!(!plan(&transport("destination", true, None), 3, 5).affects_channel);
+        assert!(!plan(&transport("message", true, None), 3, 5).affects_channel);
     }
     #[tokio::test]
     async fn response_extracts_safe_delays_without_persisting_remote_bodies() {

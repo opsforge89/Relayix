@@ -71,7 +71,9 @@ pub(crate) fn generated_slug(name: &str, id: Uuid) -> String {
 }
 pub(crate) fn valid_route(input: &RouteInput) -> Result<()> {
     payload_rules::validate_rules(&input.payload_rules)?;
-    if let Some(settings)=&input.delivery_settings {delivery_policy::Settings::parse(settings)?;}
+    if let Some(settings) = &input.delivery_settings {
+        delivery_policy::Settings::parse(settings)?;
+    }
     if input
         .rate_limit_per_minute
         .is_some_and(|n| !(0..=1_000_000).contains(&n))
@@ -182,7 +184,11 @@ pub(crate) async fn create_route(
         ));
     }
     sqlx::query("UPDATE routes SET delivery_settings=COALESCE($2,delivery_settings) WHERE id=$1")
-        .bind(id).bind(&input.delivery_settings).execute(&mut *tx).await.map_err(db_error)?;
+        .bind(id)
+        .bind(&input.delivery_settings)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     for cid in input.channel_ids {
         sqlx::query("INSERT INTO route_channels(route_id,channel_id) VALUES($1,$2)")
             .bind(id)
@@ -240,7 +246,11 @@ pub(crate) async fn update_route(
         .await
         .map_err(db_error)?;
     sqlx::query("UPDATE routes SET delivery_settings=COALESCE($2,delivery_settings) WHERE id=$1")
-        .bind(id).bind(&input.delivery_settings).execute(&mut *tx).await.map_err(db_error)?;
+        .bind(id)
+        .bind(&input.delivery_settings)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     for cid in input.channel_ids {
         sqlx::query("INSERT INTO route_channels(route_id,channel_id) VALUES($1,$2)")
             .bind(id)

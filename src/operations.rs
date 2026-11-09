@@ -139,8 +139,9 @@ async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
     };
     let row:Option<(Uuid,i32,Uuid,i32,Value)>=sqlx::query_as(
-  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) || jsonb_build_object('__relayix_group',e.group_id,'__relayix_policy',r.delivery_settings) FROM deliveries d JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) || jsonb_build_object('__relayix_group',e.group_id,'__relayix_policy',r.delivery_settings,'__relayix_route_id',e.route_id,'__relayix_group_key',(SELECT group_key FROM event_groups WHERE id=e.group_id)) FROM deliveries d JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     if let Some((id,priority,_,_,payload))=&row {
+        if !event_groups::try_claim(&mut tx,payload).await? {return Ok(lease::Claim::Contended)}
         let policy=delivery_policy::Settings::parse(&payload["__relayix_policy"])?;
         let now=Utc::now();
         let allowed=policy.allowed_at(now,*priority);

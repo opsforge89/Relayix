@@ -268,10 +268,18 @@ pub async fn login(
     };
     let password_valid = verify_password(input.password, encoded).await
         && row.as_ref().map(|r| r.2).unwrap_or(false);
-    let (valid,mfa_verified) = if password_valid {
-        crate::totp::consume(&s.db,row.as_ref().unwrap().0,input.code.trim()).await
-            .map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to verify two-factor authentication"))?
-    } else {(false,false)};
+    let (valid, mfa_verified) = if password_valid {
+        crate::totp::consume(&s.db, row.as_ref().unwrap().0, input.code.trim())
+            .await
+            .map_err(|_| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Unable to verify two-factor authentication",
+                )
+            })?
+    } else {
+        (false, false)
+    };
     if !valid {
         sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
             .bind(&attempt_key).bind(&account_key).execute(&s.db).await.map_err(db_error)?;

@@ -9,7 +9,10 @@ pub async fn lock(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, channel: Uuid)
     Ok(())
 }
 // Message rejections also prove recovery, but must preserve an active provider cooldown.
-async fn clear_recovered(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, channel: Uuid) -> Result<()> {
+async fn clear_recovered(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    channel: Uuid,
+) -> Result<()> {
     sqlx::query("DELETE FROM channel_health WHERE channel_id=$1 AND (paused_until IS NULL OR paused_until<=NOW())")
         .bind(channel).execute(&mut **tx).await?;
     Ok(())
@@ -39,7 +42,7 @@ pub async fn record(
 }
 
 pub async fn status(db: &PgPool, channel: Uuid) -> sqlx::Result<Value> {
-    let value: Option<(Value,)> = sqlx::query_as("SELECT jsonb_build_object('consecutive_failures',consecutive_failures,'last_error',last_error,'paused_until',paused_until,'state',CASE WHEN paused_until>NOW() THEN 'paused' WHEN paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channel_health WHERE channel_id=$1")
+    let value: Option<(Value,)> = sqlx::query_as("SELECT jsonb_build_object('consecutive_failures',COALESCE(h.consecutive_failures,0),'last_error',h.last_error,'paused_until',h.paused_until,'manual_pause_until',c.manual_pause_until,'state',CASE WHEN c.manual_paused AND (c.manual_pause_until IS NULL OR c.manual_pause_until>NOW()) THEN 'manual' WHEN h.paused_until>NOW() THEN 'paused' WHEN h.paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channels c LEFT JOIN channel_health h ON h.channel_id=c.id WHERE c.id=$1")
         .bind(channel).fetch_optional(db).await?;
     Ok(value.map(|v| v.0).unwrap_or_else(|| json!({"state":"healthy","consecutive_failures":0,"paused_until":null,"last_error":null})))
 }

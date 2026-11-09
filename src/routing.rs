@@ -182,9 +182,16 @@ async fn enqueue(
         tracing::warn!(route_id=%endpoint.id, reason="invalid_payload", error=message, test, "webhook payload rejected");
         err(StatusCode::BAD_REQUEST, message)
     })?;
-    let now=chrono::Utc::now();
-    let requested=crate::delivery_policy::requested_time(&payload,now).map_err(|e|err(StatusCode::BAD_REQUEST,e))?;
-    let policy=crate::delivery_policy::Settings::parse(&endpoint.delivery_settings).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Invalid route delivery settings"))?;
+    let now = chrono::Utc::now();
+    let requested = crate::delivery_policy::requested_time(&payload, now)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let policy =
+        crate::delivery_policy::Settings::parse(&endpoint.delivery_settings).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Invalid route delivery settings",
+            )
+        })?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let payload_hash = hash(&serde_json::to_string(&payload).unwrap());
     if let Some(ref key_hash) = idempotency {
@@ -271,13 +278,21 @@ async fn enqueue(
     if let Some(result) = &template_result {
         routing["template"] = result.clone();
     }
-    let mut scheduled_at=policy.allowed_at(requested,event.priority);
-    let grouping=if routing["matched"]==true {policy.grouping(event.priority)}else{None};
-    if let Some((_,seconds))=grouping {
-        let closes=chrono::DateTime::from_timestamp((now.timestamp().div_euclid(seconds)+1)*seconds,0).unwrap();
-        scheduled_at=policy.allowed_at(scheduled_at.max(closes),event.priority);
+    let mut scheduled_at = policy.allowed_at(requested, event.priority);
+    let grouping = if routing["matched"] == true {
+        policy.grouping(event.priority)
+    } else {
+        None
+    };
+    if let Some((_, seconds)) = grouping {
+        let closes = chrono::DateTime::from_timestamp(
+            (now.timestamp().div_euclid(seconds) + 1) * seconds,
+            0,
+        )
+        .unwrap();
+        scheduled_at = policy.allowed_at(scheduled_at.max(closes), event.priority);
     }
-    routing["delivery_policy"]=json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
+    routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
     if let Some(role) = preview_role {
         let would_queue = routing["recipients"]
             .as_array()
@@ -300,7 +315,7 @@ async fn enqueue(
         let presentations = channels.into_iter().map(|c| {
             let presentation = message::preview(&c.kind, &c.config, &event.title, &event.message, event.priority, role=="admin")
                 .unwrap_or_else(|_| json!({"error":"Unable to render this channel; check its template settings"}));
-            json!({"id":c.id,"name":c.name,"kind":c.kind,"enabled":c.enabled,"is_fallback":fallback.iter().any(|r|r.0==c.id),"presentation":presentation})
+            json!({"id":c.id,"name":c.name,"kind":c.kind,"enabled":c.enabled,"paused":c.manual_paused && c.manual_pause_until.is_none_or(|at|at>chrono::Utc::now()),"is_fallback":fallback.iter().any(|r|r.0==c.id),"presentation":presentation})
         }).collect::<Vec<_>>();
         return Ok(Json(
             json!({"preview":true,"queued":0,"would_queue":would_queue,"routing":routing,"channel_previews":presentations,"rendered":{"title":event.title,"message":event.message}}),
@@ -317,7 +332,18 @@ async fn enqueue(
         let content=if kind=="dedup"{json!({"title":event.title,"message":event.message,"priority":event.priority,"tags":event.tags})}else{json!("digest")};
         crate::hash(&json!({"kind":kind,"bucket":now.timestamp().div_euclid(seconds),"content":content,"recipients":routing["recipients"],"fallback":routing["fallback_recipients"],"policy":endpoint.delivery_settings,"deliver_at":payload.get("deliver_at"),"delay":payload.get("delay")}).to_string())
     });
-    let existing_group=if let Some(key)=&group_key {crate::event_groups::find(&mut tx,endpoint.id,key).await.map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to prepare delivery group"))?}else{None};
+    let existing_group = if let Some(key) = &group_key {
+        crate::event_groups::find(&mut tx, endpoint.id, key)
+            .await
+            .map_err(|_| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Unable to prepare delivery group",
+                )
+            })?
+    } else {
+        None
+    };
     if existing_group.is_none() && endpoint.rate_limit_per_minute > 0 {
         let admitted: Option<Uuid> = sqlx::query_scalar("INSERT INTO route_rate_windows(route_id) VALUES($1) ON CONFLICT(route_id) DO UPDATE SET window_started_at=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN NOW() ELSE route_rate_windows.window_started_at END,requests=CASE WHEN route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' THEN 1 ELSE route_rate_windows.requests+1 END WHERE route_rate_windows.window_started_at<=NOW()-INTERVAL '1 minute' OR route_rate_windows.requests<$2 RETURNING route_id")
             .bind(endpoint.id).bind(endpoint.rate_limit_per_minute).fetch_optional(&mut *tx).await.map_err(db_error)?;
@@ -328,30 +354,60 @@ async fn enqueue(
             ));
         }
     }
-    if let Some(group)=&existing_group {
-        routing["reason"]=json!("coalesced");
-        routing["group_leader_id"]=json!(group.leader);
-        for recipient in routing["recipients"].as_array_mut().unwrap(){recipient["queued"]=json!(false);recipient["reason"]=json!("coalesced");}
+    if let Some(group) = &existing_group {
+        routing["reason"] = json!("coalesced");
+        routing["group_leader_id"] = json!(group.leader);
+        for recipient in routing["recipients"].as_array_mut().unwrap() {
+            recipient["queued"] = json!(false);
+            recipient["reason"] = json!("coalesced");
+        }
     }
     let event_id = Uuid::new_v4();
     sqlx::query("INSERT INTO events(id,route_id,title,message,priority,tags,payload,routing,idempotency_hash,payload_hash,rendered_payload,template_snapshot,template_result) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
         .bind(event_id).bind(endpoint.id).bind(&event.title).bind(&event.message).bind(event.priority)
         .bind(json!(event.tags)).bind(payload).bind(&routing).bind(idempotency).bind(payload_hash).bind(if snapshot.is_some(){Some(effective)}else{None}).bind(snapshot).bind(template_result).execute(&mut *tx).await.map_err(db_error)?;
-    sqlx::query("UPDATE events SET deliver_at=$2 WHERE id=$1").bind(event_id).bind(scheduled_at).execute(&mut *tx).await.map_err(db_error)?;
-    if let Some(group)=existing_group {
-        sqlx::query("UPDATE events SET group_id=$2 WHERE id=$1").bind(event_id).bind(group.id).execute(&mut *tx).await.map_err(db_error)?;
-        let count:i32=sqlx::query_scalar("UPDATE event_groups SET occurrences=occurrences+1 WHERE id=$1 RETURNING occurrences").bind(group.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    sqlx::query("UPDATE events SET deliver_at=$2 WHERE id=$1")
+        .bind(event_id)
+        .bind(scheduled_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    if let Some(group) = existing_group {
+        sqlx::query("UPDATE events SET group_id=$2 WHERE id=$1")
+            .bind(event_id)
+            .bind(group.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        let count: i32 = sqlx::query_scalar(
+            "UPDATE event_groups SET occurrences=occurrences+1 WHERE id=$1 RETURNING occurrences",
+        )
+        .bind(group.id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_error)?;
         sqlx::query("UPDATE deliveries SET not_before=GREATEST(not_before,$2),next_attempt_at=GREATEST(next_attempt_at,$2) WHERE event_id=$1 AND status='queued'")
             .bind(group.leader).bind(scheduled_at).execute(&mut *tx).await.map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
-        return Ok(Json(json!({"event_id":event_id,"queued":0,"grouped":true,"group_id":group.id,"group_leader_id":group.leader,"occurrences":count,"routing":routing})));
+        return Ok(Json(
+            json!({"event_id":event_id,"queued":0,"grouped":true,"group_id":group.id,"group_leader_id":group.leader,"occurrences":count,"routing":routing}),
+        ));
     }
-    if let (Some((kind,seconds)),Some(key))=(grouping,group_key) {
-        let group=Uuid::new_v4();
-        let closes=chrono::DateTime::from_timestamp((now.timestamp().div_euclid(seconds)+1)*seconds,0).unwrap();
+    if let (Some((kind, seconds)), Some(key)) = (grouping, group_key) {
+        let group = Uuid::new_v4();
+        let closes = chrono::DateTime::from_timestamp(
+            (now.timestamp().div_euclid(seconds) + 1) * seconds,
+            0,
+        )
+        .unwrap();
         sqlx::query("INSERT INTO event_groups(id,route_id,leader_event_id,group_key,kind,closes_at) VALUES($1,$2,$3,$4,$5,$6)")
             .bind(group).bind(endpoint.id).bind(event_id).bind(key).bind(kind).bind(closes).execute(&mut *tx).await.map_err(db_error)?;
-        sqlx::query("UPDATE events SET group_id=$2 WHERE id=$1").bind(event_id).bind(group).execute(&mut *tx).await.map_err(db_error)?;
+        sqlx::query("UPDATE events SET group_id=$2 WHERE id=$1")
+            .bind(event_id)
+            .bind(group)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
     }
     let mut queued = 0;
     for recipient in routing["recipients"]

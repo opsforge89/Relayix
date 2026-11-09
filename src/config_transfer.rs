@@ -136,7 +136,11 @@ fn validate(bundle: &Bundle) -> Result<()> {
             ));
         }
         route_api::valid_route(&route_api::RouteInput {
-            delivery_settings: if route.delivery_settings.is_null(){None}else{Some(route.delivery_settings.clone())},
+            delivery_settings: if route.delivery_settings.is_null() {
+                None
+            } else {
+                Some(route.delivery_settings.clone())
+            },
             name: route.name.clone(),
             slug: None,
             enabled: Some(false),
@@ -261,8 +265,14 @@ pub async fn import(
         sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,payload_rules,rate_limit_per_minute) VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,$9)")
             .bind(id).bind(route.name.trim()).bind(slug).bind(hash(&key())).bind(route.min_priority).bind(&route.required_tag).bind(&route.icon).bind(json!(route.payload_rules)).bind(route.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
         if !route.delivery_settings.is_null() {
-            delivery_policy::Settings::parse(&route.delivery_settings).map_err(|e|err(StatusCode::BAD_REQUEST,e))?;
-            sqlx::query("UPDATE routes SET delivery_settings=$2 WHERE id=$1").bind(id).bind(&route.delivery_settings).execute(&mut *tx).await.map_err(db_error)?;
+            delivery_policy::Settings::parse(&route.delivery_settings)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+            sqlx::query("UPDATE routes SET delivery_settings=$2 WHERE id=$1")
+                .bind(id)
+                .bind(&route.delivery_settings)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_error)?;
         }
         for source in &route.channel_keys {
             sqlx::query("INSERT INTO route_channels(route_id,channel_id) VALUES($1,$2)")
