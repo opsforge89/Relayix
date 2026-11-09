@@ -319,13 +319,18 @@ pub async fn channel_backlog(
 ) -> ApiResult<Value> {
     auth::require_admin(&h, &s).await?;
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM channels WHERE id=$1)")
-        .bind(id).fetch_one(&s.db).await.map_err(db_error)?;
+        .bind(id)
+        .fetch_one(&s.db)
+        .await
+        .map_err(db_error)?;
     if !exists {
         return Err(err(StatusCode::NOT_FOUND, "Channel not found"));
     }
     let (messages, deliveries, alerts): (i64, i64, i64) = sqlx::query_as("SELECT COALESCE(SUM(COALESCE(g.occurrences,1)),0)::bigint,COUNT(*)::bigint,(SELECT COUNT(*) FROM alert_deliveries WHERE channel_id=$1 AND status='queued') FROM deliveries d JOIN events e ON e.id=d.event_id LEFT JOIN event_groups g ON g.id=e.group_id WHERE d.channel_id=$1 AND d.status='queued'")
         .bind(id).fetch_one(&s.db).await.map_err(db_error)?;
-    Ok(Json(json!({"messages":messages+alerts,"notification_messages":messages,"alert_messages":alerts,"deliveries":deliveries+alerts})))
+    Ok(Json(
+        json!({"messages":messages+alerts,"notification_messages":messages,"alert_messages":alerts,"deliveries":deliveries+alerts}),
+    ))
 }
 async fn set_manual_pause(
     s: &AppState,
@@ -337,7 +342,10 @@ async fn set_manual_pause(
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(h, s).await?;
     if cancel_backlog && actor.role != "admin" {
-        return Err(err(StatusCode::FORBIDDEN, "Administrator required to cancel queued deliveries"));
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "Administrator required to cancel queued deliveries",
+        ));
     }
     if until
         .is_some_and(|date| date <= Utc::now() || date > Utc::now() + chrono::Duration::days(365))
