@@ -22,7 +22,7 @@ export function DeliveryPreview({value}) {
 }
 export function ChannelPreviews({items=[]}) {
  if(!items.length)return null;
- return <section aria-label="Message previews"><h3>Message previews</h3><p className="helptext">Rendered with the route template and each channel's delivery limits. Preview sends no requests to destination services.</p>{items.map(channel=><section className="channel-message-preview" key={channel.id}><h4><ProviderIcon kind={channel.kind}/> {channel.name} · {integrations[channel.kind]?.label||channel.kind}{channel.is_fallback?' · Fallback':''}{!channel.enabled?' · Disabled':''}</h4><DeliveryPreview value={channel.presentation}/></section>)}</section>;
+ return <section aria-label="Message previews"><h3>Message previews</h3><p className="helptext">Rendered with the route template and each channel's delivery limits. Preview sends no requests to destination services.</p>{items.map(channel=><section className="channel-message-preview" key={channel.id}><h4><ProviderIcon kind={channel.kind}/> {channel.name} · {integrations[channel.kind]?.label||channel.kind}{channel.is_fallback?' · Fallback':''}{!channel.enabled?' · Disabled':''}{channel.paused?' · Paused':''}</h4><DeliveryPreview value={channel.presentation}/></section>)}</section>;
 }
 export function DraftMessagePreview({draft,api}) {
  const [title,setTitle]=useState('Preview notification'),[message,setMessage]=useState('Your message appears here.'),[result,setResult]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);

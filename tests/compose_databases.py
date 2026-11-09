@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.request import build_opener,ProxyHandler,Request
 import json,os,secrets,socket,subprocess,sys,tempfile,time
 ROOT=Path(__file__).resolve().parents[1]
-IMAGE=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.8.8')
+IMAGE=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.9.0')
 PG_IMAGE='postgres:17.11-trixie'
 
 def free_port():

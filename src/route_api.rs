@@ -7,6 +7,7 @@ pub(crate) struct Route {
     pub(crate) name: String,
     pub(crate) slug: String,
     pub(crate) enabled: bool,
+    pub(crate) delivery_settings: Value,
     pub(crate) min_priority: i32,
     pub(crate) rate_limit_per_minute: i32,
     pub(crate) required_tag: Option<String>,
@@ -24,6 +25,8 @@ pub(crate) struct RouteResponse {
 }
 #[derive(Deserialize)]
 pub(crate) struct RouteInput {
+    #[serde(default)]
+    pub(crate) delivery_settings: Option<Value>,
     #[serde(default)]
     pub(crate) payload_rules: Vec<payload_rules::Rule>,
     #[serde(default)]
@@ -68,6 +71,9 @@ pub(crate) fn generated_slug(name: &str, id: Uuid) -> String {
 }
 pub(crate) fn valid_route(input: &RouteInput) -> Result<()> {
     payload_rules::validate_rules(&input.payload_rules)?;
+    if let Some(settings) = &input.delivery_settings {
+        delivery_policy::Settings::parse(settings)?;
+    }
     if input
         .rate_limit_per_minute
         .is_some_and(|n| !(0..=1_000_000).contains(&n))
@@ -126,7 +132,7 @@ pub(crate) async fn routes(
     h: HeaderMap,
 ) -> ApiResult<Vec<RouteResponse>> {
     auth::authenticated(&h, &s).await?;
-    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,created_at FROM routes ORDER BY created_at DESC").fetch_all(&s.db).await.map_err(db_error)?;
+    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings,created_at FROM routes ORDER BY created_at DESC").fetch_all(&s.db).await.map_err(db_error)?;
     let mut out = Vec::new();
     for route in rows {
         let ids: Vec<(Uuid,)> =
@@ -177,6 +183,12 @@ pub(crate) async fn create_route(
             "Route slug already exists or invalid input",
         ));
     }
+    sqlx::query("UPDATE routes SET delivery_settings=COALESCE($2,delivery_settings) WHERE id=$1")
+        .bind(id)
+        .bind(&input.delivery_settings)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     for cid in input.channel_ids {
         sqlx::query("INSERT INTO route_channels(route_id,channel_id) VALUES($1,$2)")
             .bind(id)
@@ -230,6 +242,12 @@ pub(crate) async fn update_route(
  .bind(id).bind(input.name.trim()).bind(input.enabled.unwrap_or(true)).bind(input.min_priority.unwrap_or(1).clamp(1,5)).bind(input.required_tag.map(|t|t.trim().to_owned()).filter(|t|!t.is_empty())).bind(input.icon.as_deref()).bind(input.template_id).bind(json!(input.payload_rules)).bind(input.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
     sqlx::query("DELETE FROM route_channels WHERE route_id=$1")
         .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    sqlx::query("UPDATE routes SET delivery_settings=COALESCE($2,delivery_settings) WHERE id=$1")
+        .bind(id)
+        .bind(&input.delivery_settings)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;

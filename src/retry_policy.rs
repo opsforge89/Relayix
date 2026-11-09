@@ -2,6 +2,8 @@
 use crate::*;
 use std::fmt;
 
+const MAX_PROVIDER_DELAY: i32 = 86_400;
+
 #[derive(Debug)]
 pub struct Failure {
     pub category: &'static str,
@@ -35,19 +37,20 @@ pub fn transport(category: &'static str, permanent: bool, delay: Option<i32>) ->
     Failure {
         category,
         permanent,
-        retry_after: delay,
+        retry_after: delay.map(|value| value.clamp(0, MAX_PROVIDER_DELAY)),
         status: None,
         message: match category {
             "authentication" => "Credentials rejected; update channel credentials",
             "destination" => "Destination rejected; check recipient and permissions",
             "rate_limit" => "Provider rate limit; waiting before retry",
+            "message" => "Message cannot be sent; check its content and template size",
             _ => "Temporary transport failure; check connectivity and server availability",
         },
     }
     .into()
 }
 fn seconds(value: u64) -> i32 {
-    value.min(i32::MAX as u64) as i32
+    value.min(MAX_PROVIDER_DELAY as u64) as i32
 }
 fn retry_after(value: &str, now: DateTime<Utc>) -> Option<i32> {
     if let Ok(value) = value.trim().parse::<u64>() {
@@ -59,7 +62,7 @@ fn retry_after(value: &str, now: DateTime<Utc>) -> Option<i32> {
             .max(0)
             .saturating_add(999)
             / 1000)
-            .min(i32::MAX as i64) as i32
+            .min(MAX_PROVIDER_DELAY as i64) as i32
     })
 }
 fn http_failure(status: u16, delay: Option<i32>) -> anyhow::Error {
@@ -84,7 +87,7 @@ fn http_failure(status: u16, delay: Option<i32>) -> anyhow::Error {
     Failure {
         category,
         permanent,
-        retry_after: delay,
+        retry_after: delay.map(|value| value.clamp(0, MAX_PROVIDER_DELAY)),
         status: Some(status),
         message,
     }
@@ -130,13 +133,22 @@ pub struct Plan {
     pub category: &'static str,
     pub signature: String,
     pub cooldown: i32,
+    pub affects_channel: bool,
 }
 pub fn plan(error: &anyhow::Error, attempt: i32, base: i32) -> Plan {
     let failure = error.downcast_ref::<Failure>();
     let backoff = base
         .max(1)
         .saturating_mul(2_i32.pow(attempt.clamp(0, 8) as u32));
-    let delay = backoff.max(failure.and_then(|f| f.retry_after).unwrap_or(0));
+    let provider_delay = failure
+        .and_then(|f| f.retry_after)
+        .map(|value| value.clamp(0, MAX_PROVIDER_DELAY));
+    let delay = backoff.max(provider_delay.unwrap_or(0));
+    let affects_channel = failure.is_none_or(|f| match f.status {
+        Some(401 | 403 | 408 | 429 | 500..=599) => true,
+        Some(_) => false,
+        None => !matches!(f.category, "destination" | "message"),
+    });
     let category = failure.map(|f| f.category).unwrap_or("temporary");
     Plan {
         permanent: failure.is_some_and(|f| f.permanent),
@@ -146,7 +158,8 @@ pub fn plan(error: &anyhow::Error, attempt: i32, base: i32) -> Plan {
             "{category}:{}",
             error.to_string().chars().take(256).collect::<String>()
         ),
-        cooldown: if category == "rate_limit" || failure.and_then(|f| f.retry_after).is_some() {
+        affects_channel,
+        cooldown: if affects_channel && (category == "rate_limit" || provider_delay.is_some()) {
             delay
         } else {
             0
@@ -172,6 +185,44 @@ mod tests {
         assert!(!p.permanent);
         assert!(plan(&http_failure(503, Some(2)), 2, 5).delay >= 20);
     }
+    #[test]
+    fn provider_delays_are_bounded_for_every_transport_and_date_format() {
+        let now = DateTime::parse_from_rfc3339("2026-11-08T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(retry_after("1000000", now), Some(MAX_PROVIDER_DELAY));
+        assert_eq!(
+            retry_after("18446744073709551615", now),
+            Some(MAX_PROVIDER_DELAY)
+        );
+        assert_eq!(
+            retry_after("Tue, 10 Nov 2026 12:00:00 GMT", now),
+            Some(MAX_PROVIDER_DELAY)
+        );
+        for error in [
+            http_failure(429, Some(i32::MAX)),
+            transport("rate_limit", false, Some(i32::MAX)),
+        ] {
+            let plan = plan(&error, 1, 5);
+            assert_eq!(plan.delay, MAX_PROVIDER_DELAY);
+            assert_eq!(plan.cooldown, MAX_PROVIDER_DELAY);
+        }
+    }
+    #[test]
+    fn message_failures_do_not_pause_channels_even_with_retry_headers() {
+        for status in [400, 404, 409, 413, 422, 425] {
+            let plan = plan(&http_failure(status, Some(3600)), 3, 5);
+            assert!(!plan.affects_channel);
+            assert_eq!(plan.cooldown, 0);
+        }
+        for status in [401, 403, 408, 429, 500, 502, 503, 504] {
+            assert!(plan(&http_failure(status, None), 3, 5).affects_channel);
+        }
+        assert!(plan(&anyhow!("Connection failed"), 3, 5).affects_channel);
+        assert!(plan(&transport("authentication", true, None), 3, 5).affects_channel);
+        assert!(!plan(&transport("destination", true, None), 3, 5).affects_channel);
+        assert!(!plan(&transport("message", true, None), 3, 5).affects_channel);
+    }
     #[tokio::test]
     async fn response_extracts_safe_delays_without_persisting_remote_bodies() {
         for (body, expected) in [
@@ -181,6 +232,14 @@ mod tests {
             ),
             (r#"{"retry_after_ms":120001}"#, 121),
             ("invalid JSON", 20),
+            (
+                r#"{"retry_after_ms":18446744073709551615}"#,
+                MAX_PROVIDER_DELAY,
+            ),
+            (
+                r#"{"parameters":{"retry_after":1000000}}"#,
+                MAX_PROVIDER_DELAY,
+            ),
         ] {
             let response = reqwest::Response::from(
                 axum::http::Response::builder()

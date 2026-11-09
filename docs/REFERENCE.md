@@ -123,6 +123,41 @@ The table describes the adapters and delivery limits enforced by Relayix. Destin
 
 For combined text limits, the title, separating line breaks and message share one allowance. Relayix shortens oversized deliveries with a visible `[Message truncated]` marker; separately limited titles use `[truncated]`. Markers count toward the limits. Complete incoming content remains in history, and truncation preserves valid Unicode and Telegram markup. Changing a destination's own limit does not change Relayix's configured delivery cap.
 
+### Delivery controls
+
+Channels have **Pause** and **Resume** actions. Pause indefinitely, for an hour/day/week, or until a chosen date. Automatic notifications and alerts remain queued and consume no attempts. Requests already in progress may finish. A successful channel save resets automatic cooldowns, but preserves a manual pause. Resume clears both pauses and retry delays while preserving explicit scheduled dates and grouping windows. Direct Test sends and diagnostics remain available.
+
+Route forms contain **Delivery timing and grouping**. All policies are disabled by default:
+
+| Setting | Behavior |
+| --- | --- |
+| Quiet hours | Choose an IANA timezone and start/end clock times, including overnight periods. Lower-priority messages wait until quiet hours end. DST gaps and repeated hours are handled using the timezone database. |
+| Urgent priority | Messages at or above this threshold bypass quiet hours, deduplication and digests. Default: 4. Explicit webhook schedules still apply. |
+| Deduplication | Set 5–300 seconds, or 0 to disable. Equal rendered title/body, priority and tags within a fixed window share one delivery marked `×N`. Different recipients, policies or explicit schedules form separate groups. |
+| Digest | Choose hourly or every 24 hours and a priority cutoff. Lower-priority events share a summary; a digest contains at most 50 events, with additional batches if needed. Summaries shorten individual entries and remain subject to each integration's delivery limit. |
+
+Every incoming event keeps its original payload and rendered template in history. **Event details → Delivery group** identifies its leader, count, window and up to 50 members. A group's leader owns the actual deliveries and fallback recipients. Group membership freezes when delivery begins, so retries preserve the accepted group. Duplicate events added to an existing group return `grouped: true`, `queued: 0`, `group_leader_id` and `occurrences`; they are accepted, not discarded. Coalesced repeats do not consume another route quota slot; request/IP limits still apply. PostgreSQL coordinates concurrent sources and application replicas.
+
+Digest windows are fixed UTC windows; quiet hours can postpone their delivery further. Digests take precedence over deduplication for events below the digest cutoff. Existing accepted schedules are preserved when editing a route; current quiet-hour settings are also checked before retries.
+
+### Scheduled webhooks
+
+Add either `deliver_at` (RFC 3339, including a timezone) or `delay` (whole seconds) to the webhook JSON. Both fields together are rejected. Schedule at most 30 days ahead; a timestamp in the past becomes immediately eligible.
+
+```json
+{"title":"Maintenance reminder","message":"Check the backup","deliver_at":"2026-11-10T09:00:00+03:00"}
+```
+
+```json
+{"message":"Remind me in one hour","delay":3600}
+```
+
+Scheduled events survive restarts, respect manual pauses and quiet hours, and consume no transport attempts while waiting. Manual retries and channel resume do not bypass the original schedule. Route previews show the earliest delivery time and grouping policy without storing events or contacting a destination.
+
+### Connection examples
+
+Open a route's **Integration guide** for **curl**, **Python** or **Bash** snippets with its actual endpoint and editable title/message. Python uses the standard library; Bash uses curl. Optionally paste the saved route key to fill the examples, or replace `YOUR_ROUTE_KEY` yourself. The key is kept only in the open dialog and is not stored. Running an example sends a real notification; copying or editing it sends nothing.
+
 ### Automatic message formatting
 
 The channel creation and editing form shows the incoming title/message size limits and the selected integration's delivery limits, including how oversized deliveries are shortened. Incoming notifications accept at most 256 UTF-8 bytes for the title and 10,000 UTF-8 bytes for the message; larger inputs are rejected.
@@ -194,11 +229,11 @@ Previewing stores no event, consumes no route quota and contacts no destination 
 
 HTTP 401/403 failures are reported as authentication/permission errors; other permanent request failures (such as 400, 404 or 413) also stop the delivery immediately. HTTP 408, 409, 425, 429 and 5xx responses, timeouts and connection failures use automatic retries. SMTP permanent responses and Telegram credential/destination errors stop immediately. Temporary SMTP and Telegram transport errors retry. Fallback recipients are queued after a permanent primary failure or after five unsuccessful transient attempts.
 
-Relayix waits for the greater of exponential backoff and the provider's retry delay. It accepts HTTP `Retry-After` seconds or dates, Telegram Bot API `parameters.retry_after`, Telegram MTProto/WEB flood-wait seconds, and Matrix `retry_after_ms`. Missing or invalid delay values use normal backoff. **Delivery attempts** shows the failure category and earliest next attempt time.
+Relayix waits for the greater of exponential backoff and the provider's retry delay. It accepts HTTP `Retry-After` seconds or dates, Telegram Bot API `parameters.retry_after`, Telegram MTProto/WEB flood-wait seconds, and Matrix `retry_after_ms`. Provider-supplied delays are capped at 24 hours for every transport, including date values and JSON retry fields. Missing or invalid delay values use normal backoff. **Delivery attempts** shows the failure category and earliest next attempt time.
 
-After three consecutive failures with the same error, automatic delivery to that channel pauses for at least 60 seconds. A provider rate limit or explicit retry delay starts a cooldown immediately, lasting at least the requested delay. Both ordinary and alert queues share this state in PostgreSQL across workers and replicas. Queued messages stay queued without consuming attempts while paused; other channels continue delivering.
+After three consecutive channel failures with the same error, automatic delivery to that channel pauses for at least 60 seconds. Channel failures include HTTP 401/403, HTTP 408, HTTP 429, 5xx responses, network failures and invalid channel configuration. Other request rejections, including HTTP 400/413 and permanent SMTP recipient failures, remain delivery errors and do not pause the channel. A message rejection clears the failure streak and releases an expired recovery probe, while preserving any active cooldown. A provider rate limit or explicit retry delay on a channel failure starts a cooldown immediately; the provider delay is capped at 24 hours. Both ordinary and alert queues share this state in PostgreSQL across workers and replicas. Queued messages stay queued without consuming attempts while paused; other channels continue delivering.
 
-After cooldown expiry, only one queued attempt may probe the channel across both queues. A successful probe clears the failure state and releases the backlog; another failure renews the cooldown. An already-running successful send cannot clear an active cooldown. **Channels** shows the pause deadline and reason, or **Probe pending** after expiry. Recovery needs queued work; Relayix does not send synthetic probe messages. Manual queue retries preserve channel cooldowns. Explicit direct **Test** sends and diagnostics remain available to check a repaired configuration.
+After cooldown expiry, only one queued attempt may probe the channel across both queues. A successful probe clears the failure state and releases the backlog; another failure renews the cooldown. An already-running successful send cannot clear an active cooldown. **Channels** shows the pause deadline and reason, or **Probe pending** after expiry. Recovery needs queued work; Relayix does not send synthetic probe messages. A successful channel save clears its failure state and cooldown and makes queued retries eligible immediately in both queues, preserving attempts and history. Failed saves and draft diagnostics leave the cooldown intact. Manual queue retries preserve channel cooldowns. Explicit direct **Test** sends and diagnostics remain available to check a repaired configuration.
 
 ## Failure alerts
 
@@ -268,6 +303,16 @@ Failure means `failed > 0`, `success: false`, or a failure/canceled status in `s
 
 If required variables are missing, the original message/title is used. If neither the template nor the original payload can supply useful content, the webhook returns `400` with an explanation. Rendering and the template version are saved per event. Editing or deleting a template affects new events; retries and fallback retain the accepted event's text. Original payload and template snapshot are available in **Incoming webhooks → Details → Technical**. Historical disabled template records remain separate and are never activated automatically.
 
+## Optional administrator two-factor authentication
+
+TOTP is **off by default** and is enabled separately for each administrator password account in **Settings → Two-factor authentication**. Sign in with a username and password, confirm the current password, add the displayed key manually to an authenticator app (SHA-1, six digits, 30-second period), and enter its current code. Setup expires after ten minutes and does not enable protection until confirmation succeeds.
+
+Enabling protection shows ten recovery codes once and signs out other sessions. Save the codes offline. Thereafter, password sign-in also requires an unused authenticator code or recovery code. Each matched TOTP time step is accepted once across replicas, with one step of clock skew. Recovery codes are stored only as hashes and consumed atomically. Failed authenticator/settings checks are rate-limited; five failures impose a 15-minute cooldown, in addition to existing login limits. Keep the server clock synchronized.
+
+Disabling protection requires the current password and an unused authenticator/recovery code. Other sessions are revoked. Authenticator secrets remain in the private database and are never included in account APIs or configuration exports; restrict database/backup access. Setup keys and recovery codes are not stored in browser preferences or local storage.
+
+The administrator API token remains an independent recovery credential. If the authenticator and recovery codes are lost, use it to `POST /api/users/{id}/totp/reset`; cookie sessions cannot call this recovery endpoint. Reset disables TOTP and revokes that user's sessions. Password resets and role changes do not silently disable an enrolled authenticator.
+
 ## API
 
 Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorization: Bearer ADMIN_TOKEN`. `/h/{slug}` continues to use only its own `X-Relay-Key`.
@@ -278,6 +323,11 @@ Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorizati
 | POST | `/api/auth/login` | Username/password login; returns HttpOnly session cookie |
 | POST | `/api/auth/logout` | Revoke current session |
 | GET | `/api/auth/me` | Current account and role |
+| GET | `/api/auth/totp` | Own administrator TOTP status and remaining recovery-code count |
+| POST | `/api/auth/totp/setup` | Password-confirmed enrollment preparation |
+| POST | `/api/auth/totp/enable` | Confirm code and receive one-time recovery codes |
+| POST | `/api/auth/totp/disable` | Require password and authenticator/recovery code |
+| POST | `/api/users/{id}/totp/reset` | Lost-authenticator recovery; administrator API token only |
 | PUT | `/api/auth/profile` | Display name/password update |
 | PUT | `/api/auth/preferences` | Validate and save account preferences |
 | GET | `/api/tags` | Distinct suggested route/event tags |
@@ -286,6 +336,8 @@ Use an authenticated browser session plus `X-Relay-Client: web`, or `Authorizati
 | GET / POST | `/api/channels` | List/create channels |
 | PUT / DELETE | `/api/channels/{id}` | Edit/delete channel |
 | POST | `/api/channels/{id}/test` | Direct test notification |
+| POST | `/api/channels/{id}/pause` | Pause automatic delivery; JSON accepts optional RFC 3339 until, at most 365 days ahead |
+| POST | `/api/channels/{id}/resume` | Clear manual/automatic pauses and release retries while preserving scheduled dates |
 | POST | `/api/channels/{id}/diagnose` | Read-only diagnostics for saved settings |
 | POST | `/api/channels/diagnose` | Read-only draft diagnostics; optional id restores masked secrets for unchanged destinations |
 | POST | `/api/channels/preview` | Render a draft message without storing or sending; accepts kind, config, title, message and optional priority |

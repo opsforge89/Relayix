@@ -49,6 +49,8 @@ struct PortableRoute {
     name: String,
     min_priority: i32,
     rate_limit_per_minute: i32,
+    #[serde(default)]
+    delivery_settings: Value,
     required_tag: Option<String>,
     icon: String,
     payload_rules: Vec<payload_rules::Rule>,
@@ -134,6 +136,11 @@ fn validate(bundle: &Bundle) -> Result<()> {
             ));
         }
         route_api::valid_route(&route_api::RouteInput {
+            delivery_settings: if route.delivery_settings.is_null() {
+                None
+            } else {
+                Some(route.delivery_settings.clone())
+            },
             name: route.name.clone(),
             slug: None,
             enabled: Some(false),
@@ -167,7 +174,7 @@ pub async fn export(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Bundle
         .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;
-    let routes: Vec<Route> = sqlx::query_as("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,created_at FROM routes ORDER BY id LIMIT 501").fetch_all(&mut *tx).await.map_err(db_error)?;
+    let routes: Vec<Route> = sqlx::query_as("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings,created_at FROM routes ORDER BY id LIMIT 501").fetch_all(&mut *tx).await.map_err(db_error)?;
     let mut bundle = Bundle {
         schema_version: 1,
         channels: Vec::new(),
@@ -213,6 +220,7 @@ pub async fn export(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Bundle
             name: route.name,
             min_priority: route.min_priority,
             rate_limit_per_minute: route.rate_limit_per_minute,
+            delivery_settings: route.delivery_settings,
             required_tag: route.required_tag,
             icon: route.icon,
             payload_rules: serde_json::from_value(route.payload_rules).map_err(|_| {
@@ -256,6 +264,16 @@ pub async fn import(
         // No original endpoint/token is imported or exported, and no active route is changed.
         sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,payload_rules,rate_limit_per_minute) VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,$9)")
             .bind(id).bind(route.name.trim()).bind(slug).bind(hash(&key())).bind(route.min_priority).bind(&route.required_tag).bind(&route.icon).bind(json!(route.payload_rules)).bind(route.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
+        if !route.delivery_settings.is_null() {
+            delivery_policy::Settings::parse(&route.delivery_settings)
+                .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+            sqlx::query("UPDATE routes SET delivery_settings=$2 WHERE id=$1")
+                .bind(id)
+                .bind(&route.delivery_settings)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_error)?;
+        }
         for source in &route.channel_keys {
             sqlx::query("INSERT INTO route_channels(route_id,channel_id) VALUES($1,$2)")
                 .bind(id)

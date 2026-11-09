@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 Beta — 2026-11-09
+
+- Add manual channel pause/resume with optional expiry, retaining queued notifications and alerts. Resume also resets automatic cooldowns.
+- Add route quiet hours with IANA timezones and urgent-priority bypass, plus RFC 3339 deliver_at or bounded delay webhook scheduling.
+- Coalesce identical notifications into one ×N delivery and collect low-priority events into hourly or daily digests, retaining every incoming event and durable grouping across replicas.
+- Add editable curl, standard-library Python and Bash examples to route integration guides.
+- Add opt-in administrator TOTP, password-confirmed enrollment, one-use authenticator/recovery codes, other-session revocation and API-token recovery.
+
+- Cap provider-supplied retry delays at 24 hours across HTTP headers/dates, Matrix JSON and Telegram transports.
+- Clear channel cooldowns and release queued retry deadlines atomically after a successful channel save, preserving attempt history.
+- Count channel failures toward automatic pauses; retain individual message rejection errors without pausing healthy traffic or losing alert error details.
+
 ## 0.8.8 Beta — 2026-11-08
 
 - Preview per-channel outgoing messages in channel forms and route tests, including formatting, actual size budgets, truncation markers and fallback recipients. Previews send no network requests or events; custom webhook bodies remain administrator-only.

@@ -79,6 +79,9 @@ pub async fn event_details(
     };
     let has_title = !message::event_title(source).is_empty();
     value["has_title"] = json!(has_title);
+    let group:Option<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('id',g.id,'kind',g.kind,'occurrences',g.occurrences,'leader_event_id',g.leader_event_id,'closes_at',g.closes_at,'members',(SELECT jsonb_agg(jsonb_build_object('id',m.id,'title',m.title,'message',m.message) ORDER BY m.created_at,m.id) FROM (SELECT id,title,message,created_at FROM events WHERE group_id=g.id ORDER BY created_at,id LIMIT 50) m)) FROM event_groups g JOIN events e ON e.group_id=g.id WHERE e.id=$1")
+        .bind(id).fetch_optional(&s.db).await.map_err(db_error)?;
+    value["delivery_group"] = group.map(|g| g.0).unwrap_or(Value::Null);
     Ok(Json(value))
 }
 #[derive(FromRow)]
@@ -136,7 +139,21 @@ async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
     };
     let row:Option<(Uuid,i32,Uuid,i32,Value)>=sqlx::query_as(
-  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) FROM deliveries d JOIN events e ON e.id=d.event_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) || jsonb_build_object('__relayix_group',e.group_id,'__relayix_policy',r.delivery_settings,'__relayix_route_id',e.route_id,'__relayix_group_key',(SELECT group_key FROM event_groups WHERE id=e.group_id)) FROM deliveries d JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+    if let Some((id, priority, _, _, payload)) = &row {
+        if !event_groups::try_claim(&mut tx, payload).await? {
+            return Ok(lease::Claim::Contended);
+        }
+        let policy = delivery_policy::Settings::parse(&payload["__relayix_policy"])?;
+        let now = Utc::now();
+        let allowed = policy.allowed_at(now, *priority);
+        if allowed > now {
+            sqlx::query("UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Worker lease expired; deferred by quiet hours' WHERE delivery_id=$1 AND status='processing'").bind(id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE deliveries SET status='queued',locked_at=NULL,next_attempt_at=GREATEST(next_attempt_at,$2) WHERE id=$1").bind(id).bind(allowed).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(lease::Claim::Contended);
+        }
+    }
     if let Some((id, _, _, number, _)) = &row {
         sqlx::query("UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Worker lease expired; outcome unknown' WHERE delivery_id=$1 AND status='processing'").bind(id).execute(&mut *tx).await?;
         sqlx::query("UPDATE deliveries SET status='processing',locked_at=NOW(),attempts=attempts+1,cycle_attempts=cycle_attempts+1 WHERE id=$1").bind(id).execute(&mut *tx).await?;
@@ -203,6 +220,7 @@ async fn deliver_owned(
     payload: &Value,
 ) -> Result<()> {
     let work = async {
+        let payload = event_groups::presentation(&s.db, payload.clone()).await?;
         let channel = sqlx::query_as::<_, Channel>("SELECT * FROM channels WHERE id=$1")
             .bind(cid)
             .fetch_optional(&s.db)
@@ -212,8 +230,8 @@ async fn deliver_owned(
                 send(
                     &s.client,
                     &c,
-                    message::event_title(payload),
-                    message::event_message(payload),
+                    message::event_title(&payload),
+                    message::event_message(&payload),
                     priority,
                     s.allow_http,
                     id,

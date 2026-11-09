@@ -10,6 +10,7 @@ const reasons={
  no_destinations:'No recipients are linked to this route.',
  no_active_destinations:'All linked recipients are disabled.',
  destination_disabled:'Recipient disabled.',
+ coalesced:'Accepted into an existing delivery group.',
 };
 
 export function RouteTestDialog({route,onClose,onTest,onPreview,onCopy,onViewDeliveries}) {
@@ -36,6 +37,7 @@ export function RouteTestDialog({route,onClose,onTest,onPreview,onCopy,onViewDel
    {!!result.routing.recipients?.length&&<ul>{result.routing.recipients.map(recipient=><li key={recipient.id}><span>{recipient.name}</span><small>{recipient.would_queue?'Would queue':recipient.queued?'Queued':reasons[recipient.reason]||recipient.reason}</small></li>)}</ul>}
    {!!result.routing.fallback_recipients?.length&&<p className="helptext">Fallback after final failure: {result.routing.fallback_recipients.map(r=>`${r.name}${r.enabled?'':' (disabled)'}`).join(', ')}</p>}
    {result.event_id&&<p className="helptext">Event: <code>{result.event_id}</code></p>}
+   {result.routing.delivery_policy&&<p className="helptext">Delivery no earlier than {new Date(result.routing.delivery_policy.not_before).toLocaleString()}{result.routing.delivery_policy.grouping?` · ${result.routing.delivery_policy.grouping} window: ${result.routing.delivery_policy.window_seconds} seconds`:''}{result.routing.delivery_policy.quiet_hours?` · Quiet hours in ${result.routing.delivery_policy.timezone}`:''}.</p>}
    {result.preview&&<ChannelPreviews items={result.channel_previews}/>}
    <details><summary>API response</summary><pre>{JSON.stringify(result,null,2)}</pre></details>
    {!!result.queued&&<><p className="helptext">Queued does not mean delivered. Open Deliveries to inspect the send result.</p><button type="button" className="secondary" onClick={onViewDeliveries}>View test deliveries</button></>}
