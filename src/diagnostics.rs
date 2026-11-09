@@ -248,6 +248,8 @@ pub async fn draft(
         kind: draft.kind,
         config: draft.config,
         enabled: true,
+        manual_paused: false,
+        manual_pause_until: None,
         created_at: Utc::now(),
     };
     Ok(check(&s, &c).await)

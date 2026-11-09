@@ -1,4 +1,7 @@
 mod channel_api;
+mod delivery_policy;
+mod event_groups;
+mod totp;
 mod channel_config;
 mod channel_health;
 mod client_ip;
@@ -246,6 +249,11 @@ async fn main() -> Result<()> {
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/auth/totp", get(totp::state))
+        .route("/auth/totp/setup", post(totp::setup))
+        .route("/auth/totp/enable", post(totp::enable))
+        .route("/auth/totp/disable", post(totp::disable))
+        .route("/users/{id}/totp/reset", post(totp::recover))
         .route("/auth/preferences", axum::routing::put(preferences::update))
         .route(
             "/auth/delivery-alerts",
@@ -289,6 +297,8 @@ async fn main() -> Result<()> {
             axum::routing::put(update_channel).delete(delete_channel),
         )
         .route("/channels/{id}/test", post(test_channel))
+        .route("/channels/{id}/pause", post(pause_channel))
+        .route("/channels/{id}/resume", post(resume_channel))
         .route("/channels/{id}/diagnose", post(diagnostics::channel))
         .route("/routes", get(routes).post(create_route))
         .route(

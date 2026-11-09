@@ -8,6 +8,8 @@ pub(crate) struct Channel {
     pub(crate) kind: String,
     pub(crate) config: Value,
     pub(crate) enabled: bool,
+    pub(crate) manual_paused: bool,
+    pub(crate) manual_pause_until: Option<DateTime<Utc>>,
     pub(crate) created_at: DateTime<Utc>,
 }
 #[derive(Deserialize)]
@@ -244,8 +246,53 @@ pub(crate) async fn update_channel(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    // A validated save is an explicit recovery action for this channel and both queues.
+    sqlx::query("DELETE FROM channel_health WHERE channel_id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    for table in ["deliveries", "alert_deliveries"] {
+        let query = format!("UPDATE {table} SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued' AND error IS NOT NULL");
+        sqlx::query(&query)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
+}
+#[derive(Deserialize)]
+pub struct PauseInput {
+    #[serde(default)]
+    until: Option<DateTime<Utc>>,
+}
+pub async fn pause_channel(State(s):State<AppState>,h:HeaderMap,Path(id):Path<Uuid>,Json(input):Json<PauseInput>)->ApiResult<Value>{
+    set_manual_pause(&s,&h,id,true,input.until).await
+}
+pub async fn resume_channel(State(s):State<AppState>,h:HeaderMap,Path(id):Path<Uuid>)->ApiResult<Value>{
+    set_manual_pause(&s,&h,id,false,None).await
+}
+async fn set_manual_pause(s:&AppState,h:&HeaderMap,id:Uuid,paused:bool,until:Option<DateTime<Utc>>)->ApiResult<Value>{
+    let actor=auth::authenticated(h,s).await?;
+    if until.is_some_and(|date|date<=Utc::now() || date>Utc::now()+chrono::Duration::days(365)) {
+        return Err(err(StatusCode::BAD_REQUEST,"Pause expiry must be in the next 365 days"));
+    }
+    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let config:Option<(Value,)>=sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    let config=config.ok_or_else(||err(StatusCode::NOT_FOUND,"Channel not found"))?.0;
+    require_template_editor(&actor.role,&config,Some(&config))?;
+    sqlx::query("UPDATE channels SET manual_paused=$2,manual_pause_until=$3 WHERE id=$1").bind(id).bind(paused).bind(until).execute(&mut *tx).await.map_err(db_error)?;
+    if !paused {
+        sqlx::query("DELETE FROM channel_health WHERE channel_id=$1").bind(id).execute(&mut *tx).await.map_err(db_error)?;
+        for table in ["deliveries","alert_deliveries"] {
+            sqlx::query(&format!("UPDATE {table} SET next_attempt_at=GREATEST(NOW(),not_before) WHERE channel_id=$1 AND status='queued'"))
+                .bind(id).execute(&mut *tx).await.map_err(db_error)?;
+        }
+    }
+    tx.commit().await.map_err(db_error)?;
+    Ok(Json(json!({"ok":true,"paused":paused,"until":until})))
 }
 pub(crate) async fn delete_channel(
     State(s): State<AppState>,

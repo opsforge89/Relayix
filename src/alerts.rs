@@ -199,7 +199,7 @@ pub async fn retry(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::require_admin(&h, &s).await?;
-    let result=sqlx::query("UPDATE alert_deliveries SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND status='failed' AND owner_user_id IS NULL").bind(id).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE alert_deliveries SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=GREATEST(NOW(),not_before) WHERE id=$1 AND status='failed' AND owner_user_id IS NULL").bind(id).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,
@@ -343,7 +343,7 @@ pub async fn retry_personal(
     if !exists {
         return Err(err(StatusCode::NOT_FOUND, "Alert delivery not found"));
     }
-    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=NOW() WHERE id=$1 AND owner_user_id=$2 AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=GREATEST(NOW(),not_before) WHERE id=$1 AND owner_user_id=$2 AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,
@@ -465,7 +465,7 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         lease::Claim::Idle => return Ok(lease::Claim::Idle),
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
     };
-    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND ((status='queued' AND next_attempt_at<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND ((status='queued' AND next_attempt_at<=NOW() AND not_before<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     let Some((id, cid, title, message, number)) = row else {
         return Ok(lease::Claim::Contended);
     };
@@ -509,9 +509,10 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         }
         Err(error) => {
             let plan = retry_policy::plan(&error, number, s.retry_seconds);
+            let message = error.to_string().chars().take(512).collect::<String>();
             channel_health::record(&mut tx, cid, &Err(error), number, s.retry_seconds).await?;
-            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 OR $2 THEN 'failed' ELSE 'queued' END,error=(SELECT last_error FROM channel_health WHERE channel_id=$3),error_category=$4,locked_at=NULL,next_attempt_at=NOW()+$5::int*INTERVAL '1 second' WHERE id=$1")
-                .bind(id).bind(plan.permanent).bind(cid).bind(plan.category).bind(plan.delay).execute(&mut *tx).await?;
+            sqlx::query("UPDATE alert_deliveries SET status=CASE WHEN attempts>=5 OR $2 THEN 'failed' ELSE 'queued' END,error=$3,error_category=$4,locked_at=NULL,next_attempt_at=NOW()+$5::int*INTERVAL '1 second' WHERE id=$1")
+                .bind(id).bind(plan.permanent).bind(message).bind(plan.category).bind(plan.delay).execute(&mut *tx).await?;
         }
     }
     tx.commit().await?;

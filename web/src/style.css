@@ -142,3 +142,5 @@ html{scrollbar-gutter:stable}
 @media(max-width:700px){.template-history{grid-template-columns:1fr}.version-list{max-height:180px}.version-comparison{max-height:45vh}.payload-rule>label:not(.check){flex-basis:40%}.personal-history-heading{flex-wrap:wrap}.page-header>.actions{flex-wrap:wrap}}
 
 .channel-message-preview{border-top:1px solid var(--border);padding:16px 0}.channel-message-preview h4{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.delivery-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}.draft-message-preview{margin:16px 0}.draft-message-preview>summary{cursor:pointer;margin-bottom:12px}.draft-message-preview textarea{width:100%}
+
+.route-delivery-settings{border-top:1px solid var(--border);margin-top:16px;padding-top:8px}.route-delivery-settings .form-field{margin:12px 0}.totp-settings{margin:20px 0}.totp-settings pre{white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}.route-guide .form-field{margin:12px 0}

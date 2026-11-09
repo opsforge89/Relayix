@@ -89,7 +89,7 @@ async fn password_hash(password: String) -> Result<String> {
     Ok(hash)
 }
 
-async fn verify(password: String, encoded: String) -> bool {
+pub(crate) async fn verify(password: String, encoded: String) -> bool {
     let Ok(permit) = PASSWORD_WORK.acquire().await else {
         return false;
     };
@@ -112,7 +112,7 @@ async fn verify_password(password: String, encoded: String) -> bool {
     .unwrap_or(false)
 }
 
-fn session_token(h: &HeaderMap) -> Option<&str> {
+pub(crate) fn session_token(h: &HeaderMap) -> Option<&str> {
     h.get(header::COOKIE)?
         .to_str()
         .ok()?
@@ -156,7 +156,7 @@ pub async fn authenticated(
         return Err(unauthorized());
     }
     let token = session_token(h).ok_or_else(unauthorized)?;
-    let user=sqlx::query_as::<_,User>("SELECT u.id,u.username,u.display_name,u.role,u.enabled,u.created_at,u.preferences FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.enabled=true")
+    let user=sqlx::query_as::<_,User>("SELECT u.id,u.username,u.display_name,u.role,u.enabled,u.created_at,u.preferences FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.enabled=true AND (s.mfa_verified OR NOT EXISTS(SELECT 1 FROM user_totp t WHERE t.user_id=u.id AND t.secret IS NOT NULL))")
         .bind(hash(token)).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(unauthorized)?;
     Ok(user.into())
 }
@@ -198,6 +198,8 @@ pub async fn bootstrap(db: &PgPool) -> Result<()> {
 
 #[derive(Deserialize)]
 pub struct Login {
+    #[serde(default)]
+    code: String,
     username: String,
     password: String,
 }
@@ -264,14 +266,18 @@ pub async fn login(
         Some((_, encoded, _)) => encoded.clone(),
         None => s.dummy_password_hash.as_ref().clone(),
     };
-    let valid = verify_password(input.password, encoded).await
+    let password_valid = verify_password(input.password, encoded).await
         && row.as_ref().map(|r| r.2).unwrap_or(false);
+    let (valid,mfa_verified) = if password_valid {
+        crate::totp::consume(&s.db,row.as_ref().unwrap().0,input.code.trim()).await
+            .map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to verify two-factor authentication"))?
+    } else {(false,false)};
     if !valid {
         sqlx::query("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1")
             .bind(&attempt_key).bind(&account_key).execute(&s.db).await.map_err(db_error)?;
         return Err(err(
             StatusCode::UNAUTHORIZED,
-            "Invalid username or password",
+            "Invalid username, password or verification code",
         ));
     }
     let id = row.unwrap().0;
@@ -288,10 +294,11 @@ pub async fn login(
         .map_err(db_error)?;
     let token = key();
     sqlx::query(
-        "INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,NOW()+INTERVAL '7 days')",
+        "INSERT INTO sessions(token_hash,user_id,expires_at,mfa_verified) VALUES($1,$2,NOW()+INTERVAL '7 days',$3)",
     )
     .bind(hash(&token))
     .bind(id)
+    .bind(mfa_verified)
     .execute(&s.db)
     .await
     .map_err(db_error)?;

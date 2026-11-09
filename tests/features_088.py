@@ -108,6 +108,41 @@ try:
     time.sleep(1)
     assert len(received(rate_path))==1 and len(rows(rate_route))==2
 
+    # Rejections of individual messages preserve errors without poisoning channel health.
+    message_channel=channel('webhook',{'url':'http://mock:8000/resilience088/'+suffix+'/message'})
+    message_route=route([message_channel])
+    for index in range(3):
+        event=send(message_route,'bad')['event_id']
+        failure=wait(lambda:next((d for d in rows(message_route) if d['event_id']==event and d['status']=='failed'),None))
+        assert failure['attempts']==1 and failure['error']
+        assert health(message_channel)['state']=='healthy' and health(message_channel)['consecutive_failures']==0
+    send(message_route,'A valid message still delivers')
+    wait(lambda:any(d['status']=='sent' for d in rows(message_route)))
+    # A message rejection from an expired recovery probe releases retained healthy traffic.
+    sql(f"INSERT INTO channel_health(channel_id,consecutive_failures,paused_until) VALUES('{message_channel}',3,NOW()-INTERVAL '1 second')")
+    event=send(message_route,'bad')['event_id']
+    wait(lambda:any(d['event_id']==event and d['status']=='failed' for d in rows(message_route)))
+    assert health(message_channel)['state']=='healthy'
+    message_policy=ok('/api/alert-policies',{'name':'Message rejection history','enabled':True,'watch_channel_ids':[good],'destination_ids':[message_channel],'failure_threshold':1,'min_attempts':1,'window_minutes':15,'cooldown_minutes':1,'title':'Rejected alert','body':'bad'})['id'];policies.append(message_policy)
+    ok('/api/alert-policies/'+message_policy+'/test',{},'POST')
+    rejected_alert=wait(lambda:next((a for a in ok('/api/alert-deliveries') if a['policy_name']=='Message rejection history' and a['status']=='failed'),None))
+    assert rejected_alert['error'] and health(message_channel)['consecutive_failures']==0
+
+    # Remote retry delays have a one-day ceiling, and repaired settings resume both queues.
+    huge=channel('webhook',{'url':'http://mock:8000/resilience088/'+suffix+'/huge_rate'});huge_route=route([huge]);send(huge_route)
+    huge_delivery=wait(lambda:next((d for d in rows(huge_route) if d['error']),None))
+    remaining=int(sql(f"SELECT EXTRACT(EPOCH FROM next_attempt_at-NOW())::int FROM deliveries WHERE id='{huge_delivery['id']}'"))
+    assert 86380<=remaining<=86400
+    assert request('/api/channels/'+huge,{'name':'','kind':'webhook','config':{'url':'http://mock:8000/repaired'}},'PUT')[0]==400
+    assert health(huge)['state']=='paused'
+    resume_policy=ok('/api/alert-policies',{'name':'Resume queued alerts','enabled':True,'watch_channel_ids':[good],'destination_ids':[huge],'failure_threshold':1,'min_attempts':1,'window_minutes':15,'cooldown_minutes':1,'title':'Resume alert','body':'Retained warning'})['id'];policies.append(resume_policy)
+    ok('/api/alert-policies/'+resume_policy+'/test',{},'POST')
+    sql(f"UPDATE alert_deliveries SET error='Provider rate limit',next_attempt_at=NOW()+INTERVAL '1 day' WHERE policy_id='{resume_policy}'")
+    ok('/api/channels/'+huge,{'name':'Repaired channel','kind':'webhook','config':{'url':'http://mock:8000/resilience088/'+suffix+'/repaired'}},'PUT')
+    wait(lambda:any(d['status']=='sent' for d in rows(huge_route)))
+    wait(lambda:any(a['policy_name']=='Resume queued alerts' and a['status']=='sent' for a in ok('/api/alert-deliveries')))
+    assert health(huge)['state']=='healthy'
+
     flaky_path='/resilience088/'+suffix+'/flaky'
     flaky=channel('webhook',{'url':'http://mock:8000'+flaky_path});flaky_route=route([flaky]);send(flaky_route)
     def paused():
