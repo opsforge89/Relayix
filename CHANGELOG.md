@@ -5,6 +5,7 @@
 - Expire undelivered notifications using route TTL and X-Relay-TTL, including paused, scheduled, grouped and fallback work; retain history and prevent retry revival.
 - Record successful channel, route, key and queue controls atomically with actor identity; add an administrator audit-log view with 180-day retention.
 - Add optional SECRETS_KEY AES-256-GCM encryption for channel credentials, webhook body templates and TOTP seeds, atomic migration and fail-closed key validation.
+- Restore the public schema search path before transactional session/lease recovery after pg_restore.
 - Add full password-encrypted database backups with attachments and credentials, Argon2id key derivation, authenticated streaming, verification before restore, atomic PostgreSQL restore and recovery of private application settings.
 
 ## 0.10.0 Beta — 2026-11-10

@@ -148,6 +148,7 @@ def verified_dump(deployment, path, output):
 
 # Revoke snapshot sessions and recover interrupted leases in the same restore transaction.
 RESTORE_SQL = b"""
+SET LOCAL search_path = public, pg_catalog;
 DELETE FROM sessions;
 DELETE FROM login_attempts;
 UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Interrupted by backup restore' WHERE status='processing';

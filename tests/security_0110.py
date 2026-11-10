@@ -47,6 +47,11 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
 
     def run(args, expected=0, **kwargs):
         result = subprocess.run(args, env=env, capture_output=True, timeout=120, **kwargs)
+        if result.returncode != expected and 'backup.py' in ' '.join(str(arg) for arg in args):
+            # The operational command intentionally emits only redacted failure messages.
+            message = result.stderr.decode(errors='replace')
+            if all(secret not in message for secret in [config['ADMIN_TOKEN'], config['POSTGRES_PASSWORD'], config.get('SECRETS_KEY', '')] if secret):
+                print(message, file=sys.stderr)
         assert result.returncode == expected, 'Isolated security operation failed; private output omitted'
         return result.stdout
 
