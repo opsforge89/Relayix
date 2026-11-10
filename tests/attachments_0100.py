@@ -1,5 +1,6 @@
 """Durable native file forwarding, atomic limits, private downloads and immutable retry data."""
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import subprocess
@@ -42,7 +43,9 @@ def upload(r,payload=None,files=None,headers=None,expected=200):
     try:response=urllib.request.urlopen(req,timeout=30)
     except urllib.error.HTTPError as e:response=e
     with response:
-        value=json.load(response);assert response.status==expected,(response.status,value)
+        value=json.load(response)
+        if expected is None:return response.status,value
+        assert response.status==expected,(response.status,value)
         return value
 def channel(target):
     cfg={'url':'http://mock:8000','mode':'bot','bot_token':credentials['mattermost_token'],'target':'channel','channel_id':target}
@@ -100,6 +103,14 @@ try:
         upload(r,expected=507)
         assert ok('/api/events?route_id='+r['id'])['total']==before
         assert int(sql('SELECT bytes_used FROM attachment_storage'))==usage
+    finally:sql('UPDATE attachment_storage SET limit_bytes='+str(limit))
+    usage=int(sql('SELECT bytes_used FROM attachment_storage'))
+    try:
+        sql('UPDATE attachment_storage SET limit_bytes='+str(usage+4096))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            competing=list(pool.map(lambda _:upload(r,expected=None),range(2)))
+        assert sorted(status for status,_ in competing)==[200,507]
+        assert int(sql('SELECT bytes_used FROM attachment_storage'))==usage+4096
     finally:sql('UPDATE attachment_storage SET limit_bytes='+str(limit))
     unsupported=ok('/api/channels',{'name':'Text-only files','kind':'mattermost','config':{'url':'http://mock:8000/plain-files'}})['id'];channels.append(unsupported)
     unsupported_route=route(unsupported);upload(unsupported_route,expected=400)
