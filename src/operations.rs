@@ -68,7 +68,7 @@ pub async fn event_details(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let row:Option<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('id',e.id,'route_id',e.route_id,'route_name',r.name,'route_icon',r.icon,'title',e.title,'message',e.message,'priority',e.priority,'tags',e.tags,'routing',e.routing,'created_at',e.created_at,'original_payload',e.payload,'rendered_payload',e.rendered_payload,'template',e.template_snapshot,'template_result',e.template_result,'has_title',COALESCE(e.rendered_payload,e.payload)->>'title' IS NOT NULL AND BTRIM(COALESCE(e.rendered_payload,e.payload)->>'title')<>'','recipients',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'channel_id',c.id,'channel_name',c.name,'channel_kind',c.kind,'status',d.status,'attempts',d.attempts,'is_fallback',d.is_fallback,'error',d.error,'created_at',d.created_at,'sent_at',d.sent_at) ORDER BY LOWER(c.name),c.id) FROM deliveries d JOIN channels c ON c.id=d.channel_id WHERE d.event_id=e.id),'[]'::jsonb)) FROM events e JOIN routes r ON r.id=e.route_id WHERE e.id=$1").bind(id).fetch_optional(&s.db).await.map_err(db_error)?;
+    let row:Option<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('id',e.id,'route_id',e.route_id,'route_name',r.name,'route_icon',r.icon,'title',e.title,'message',e.message,'priority',e.priority,'tags',e.tags,'routing',e.routing,'created_at',e.created_at,'expires_at',e.expires_at,'original_payload',e.payload,'rendered_payload',e.rendered_payload,'template',e.template_snapshot,'template_result',e.template_result,'has_title',COALESCE(e.rendered_payload,e.payload)->>'title' IS NOT NULL AND BTRIM(COALESCE(e.rendered_payload,e.payload)->>'title')<>'','recipients',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'channel_id',c.id,'channel_name',c.name,'channel_kind',c.kind,'status',d.status,'attempts',d.attempts,'is_fallback',d.is_fallback,'error',d.error,'created_at',d.created_at,'sent_at',d.sent_at) ORDER BY LOWER(c.name),c.id) FROM deliveries d JOIN channels c ON c.id=d.channel_id WHERE d.event_id=e.id),'[]'::jsonb)) FROM events e JOIN routes r ON r.id=e.route_id WHERE e.id=$1").bind(id).fetch_optional(&s.db).await.map_err(db_error)?;
     let mut value = row
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Event not found"))?
         .0;
@@ -126,6 +126,7 @@ pub async fn attempts(
 }
 
 async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value)>> {
+    expiration::expire(&s.db).await?;
     let mut tx = s.db.begin().await?;
     let channel = match lease::claim_channel(
         &mut tx,
@@ -140,7 +141,7 @@ async fn claim(s: &AppState) -> Result<lease::Claim<(Uuid, i32, Uuid, i32, Value
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
     };
     let row:Option<(Uuid,i32,Uuid,i32,Value)>=sqlx::query_as(
-  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) || jsonb_build_object('__relayix_group',e.group_id,'__relayix_policy',r.delivery_settings,'__relayix_route_id',e.route_id,'__relayix_group_key',(SELECT group_key FROM event_groups WHERE id=e.group_id)) FROM deliveries d JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+  "SELECT d.id,e.priority,d.channel_id,d.attempts+1 AS number,COALESCE(e.rendered_payload,e.payload) || jsonb_build_object('__relayix_group',e.group_id,'__relayix_policy',r.delivery_settings,'__relayix_route_id',e.route_id,'__relayix_group_key',(SELECT group_key FROM event_groups WHERE id=e.group_id)) FROM deliveries d JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.channel_id=$1 AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW() AND (d.expires_at IS NULL OR d.expires_at>NOW())) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY d.created_at,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     if let Some((id, priority, _, _, payload)) = &row {
         if !event_groups::try_claim(&mut tx, payload).await? {
             return Ok(lease::Claim::Contended);
@@ -179,8 +180,8 @@ async fn finish(
 ) -> Result<()> {
     let mut tx = s.db.begin().await?;
     channel_health::lock(&mut tx, channel).await?;
-    let row:Option<(Uuid,bool,i32)>=sqlx::query_as("SELECT event_id,is_fallback,cycle_attempts FROM deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE").bind(id).bind(number).fetch_optional(&mut *tx).await?;
-    let Some((event_id, is_fallback, cycle_attempts)) = row else {
+    let row:Option<(Uuid,bool,i32,bool)>=sqlx::query_as("SELECT event_id,is_fallback,cycle_attempts,COALESCE(expires_at<=NOW(),false) FROM deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE").bind(id).bind(number).fetch_optional(&mut *tx).await?;
+    let Some((event_id, is_fallback, cycle_attempts,expired)) = row else {
         return Ok(());
     };
     let plan = result
@@ -193,6 +194,8 @@ async fn finish(
         .map(|e| e.to_string().chars().take(512).collect::<String>());
     let status = if error.is_none() {
         "sent"
+    } else if expired {
+        "expired"
     } else if cycle_attempts >= 5 || plan.as_ref().is_some_and(|p| p.permanent) {
         "failed"
     } else {
@@ -203,7 +206,7 @@ async fn finish(
     if status == "failed" && !is_fallback {
         let targets:Vec<(Uuid,)>=sqlx::query_as("SELECT f.channel_id FROM event_fallback_channels f JOIN channels c ON c.id=f.channel_id WHERE f.event_id=$1 AND c.enabled ORDER BY f.channel_id").bind(event_id).fetch_all(&mut *tx).await?;
         for (cid,) in targets {
-            let result=sqlx::query("INSERT INTO deliveries(id,event_id,channel_id,is_fallback) VALUES($1,$2,$3,TRUE) ON CONFLICT(event_id,channel_id) DO NOTHING").bind(Uuid::new_v4()).bind(event_id).bind(cid).execute(&mut *tx).await?;
+            let result=sqlx::query("INSERT INTO deliveries(id,event_id,channel_id,is_fallback,expires_at) SELECT $1,$2,$3,TRUE,expires_at FROM events WHERE id=$2 AND (expires_at IS NULL OR expires_at>NOW()) ON CONFLICT(event_id,channel_id) DO NOTHING").bind(Uuid::new_v4()).bind(event_id).bind(cid).execute(&mut *tx).await?;
             if result.rows_affected() > 0 {
                 tracing::info!(%event_id,channel_id=%cid,failed_delivery_id=%id,"fallback delivery queued");
             }
@@ -222,12 +225,13 @@ async fn deliver_owned(
 ) -> Result<()> {
     let work = async {
         let payload = event_groups::presentation(&s.db, payload.clone()).await?;
-        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
+        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
             .bind(cid)
             .fetch_optional(&s.db)
             .await;
         match channel {
             Ok(Some(c)) if c.enabled => {
+                expiration::ensure_live(&s.db,id).await?;
                 let files = attachments::for_delivery(&s.db, id).await?;
                 attachments::deliver(s, &c, &payload, priority, id, &files).await
             }

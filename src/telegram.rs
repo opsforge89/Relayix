@@ -176,6 +176,11 @@ async fn transport_inner(
     let effective = application_config(cfg);
     let cfg = &effective;
     let mut child = Command::new("python3")
+        .env_remove("SECRETS_KEY")
+        .env_remove("ADMIN_TOKEN")
+        .env_remove("ADMIN_PASSWORD")
+        .env_remove("POSTGRES_PASSWORD")
+        .env_remove("DATABASE_URL")
         .env_remove("HTTP_PROXY")
         .env_remove("http_proxy")
         .env_remove("HTTPS_PROXY")

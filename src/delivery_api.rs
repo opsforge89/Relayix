@@ -55,7 +55,7 @@ pub(crate) fn normalize_delivery_filter(
         .map(|v| {
             !matches!(
                 v,
-                "sent" | "failed" | "queued" | "processing" | "retrying" | "cancelled"
+                "sent" | "failed" | "queued" | "processing" | "retrying" | "cancelled" | "expired"
             )
         })
         .unwrap_or(false)
@@ -173,7 +173,7 @@ pub(crate) async fn retry(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=GREATEST(NOW(),not_before),locked_at=NULL,error=NULL,error_category=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=$1 AND (status='failed' OR (status='queued' AND error IS NOT NULL))").bind(id).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=GREATEST(NOW(),not_before),locked_at=NULL,error=NULL,error_category=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=$1 AND (expires_at IS NULL OR expires_at>NOW()) AND (status='failed' OR (status='queued' AND error IS NOT NULL))").bind(id).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,

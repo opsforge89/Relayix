@@ -1,7 +1,7 @@
 //! Channel configuration and delivery adapters.
 use crate::*;
 
-#[derive(Serialize, FromRow)]
+#[derive(Serialize)]
 pub(crate) struct Channel {
     pub(crate) id: Uuid,
     pub(crate) name: String,
@@ -11,6 +11,15 @@ pub(crate) struct Channel {
     pub(crate) manual_paused: bool,
     pub(crate) manual_pause_until: Option<DateTime<Utc>>,
     pub(crate) created_at: DateTime<Utc>,
+}
+impl<'r> FromRow<'r,sqlx::postgres::PgRow> for Channel {
+    fn from_row(row:&'r sqlx::postgres::PgRow)->sqlx::Result<Self> {
+        use sqlx::Row;
+        let id:Uuid=row.try_get("id")?;let kind:String=row.try_get("kind")?;
+        let cfg:Value=row.try_get("config")?;let encrypted:bool=row.try_get("secrets_encrypted")?;
+        let config=secrets::open_config(id,&kind,&cfg,encrypted).map_err(|e|sqlx::Error::Decode(e.into()))?;
+        Ok(Self{id,kind,config,name:row.try_get("name")?,enabled:row.try_get("enabled")?,manual_paused:row.try_get("manual_paused")?,manual_pause_until:row.try_get("manual_pause_until")?,created_at:row.try_get("created_at")?})
+    }
 }
 #[derive(Deserialize)]
 pub(crate) struct ChannelInput {
@@ -106,7 +115,7 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
 pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut result =
-        sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels ORDER BY created_at DESC")
+        sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels ORDER BY created_at DESC")
             .fetch_all(&s.db)
             .await
             .map_err(db_error)?;
@@ -202,15 +211,20 @@ pub(crate) async fn create_channel(
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO channels (id,name,kind,config,enabled) VALUES ($1,$2,$3,$4,$5)")
+    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let encoded=secrets::seal_config(id,&input.kind,&input.config).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt channel credentials"))?;
+    sqlx::query("INSERT INTO channels (id,name,kind,config,enabled,secrets_encrypted) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(id)
         .bind(input.name.trim())
         .bind(input.kind)
-        .bind(input.config)
+        .bind(encoded)
         .bind(input.enabled.unwrap_or(true))
-        .execute(&s.db)
+        .bind(secrets::enabled())
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    audit::record(&mut tx,&principal,"channel.create","channel",id,None).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"id":id})))
 }
 pub(crate) async fn update_channel(
@@ -222,13 +236,14 @@ pub(crate) async fn update_channel(
     let principal = auth::authenticated(&h, &s).await?;
     valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let old: Option<(Value, String)> =
-        sqlx::query_as("SELECT config,kind FROM channels WHERE id=$1 FOR UPDATE")
+    let old: Option<(Value, String, bool)> =
+        sqlx::query_as("SELECT config,kind,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    let (old, old_kind) = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
+    let (old, old_kind,encrypted) = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
+    let old=secrets::open_config(id,&old_kind,&old,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
     require_template_editor(&principal.role, &input.config, Some(&old))?;
     restore_masked(&mut input.config, &old, &input.kind, &old_kind)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
@@ -237,12 +252,14 @@ pub(crate) async fn update_channel(
     network::validate(&input.config)
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    sqlx::query("UPDATE channels SET name=$2,kind=$3,config=$4,enabled=$5 WHERE id=$1")
+    let encoded=secrets::seal_config(id,&input.kind,&input.config).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt channel credentials"))?;
+    sqlx::query("UPDATE channels SET name=$2,kind=$3,config=$4,enabled=$5,secrets_encrypted=$6 WHERE id=$1")
         .bind(id)
         .bind(input.name.trim())
         .bind(input.kind)
-        .bind(input.config)
+        .bind(encoded)
         .bind(input.enabled.unwrap_or(true))
+        .bind(secrets::enabled())
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
@@ -262,6 +279,7 @@ pub(crate) async fn update_channel(
             .await
             .map_err(db_error)?;
     }
+    audit::record(&mut tx,&principal,"channel.update","channel",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -356,15 +374,14 @@ async fn set_manual_pause(
         ));
     }
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let config: Option<(Value,)> =
-        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+    let config: Option<(String,Value,bool)> =
+        sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    let config = config
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?
-        .0;
+    let (kind,config,encrypted)=config.ok_or_else(||err(StatusCode::NOT_FOUND,"Channel not found"))?;
+    let config=secrets::open_config(id,&kind,&config,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
     require_template_editor(&actor.role, &config, Some(&config))?;
     sqlx::query("UPDATE channels SET manual_paused=$2,manual_pause_until=$3 WHERE id=$1")
         .bind(id)
@@ -400,6 +417,8 @@ async fn set_manual_pause(
                 .map_err(db_error)?;
         }
     }
+    let action=if paused {"channel.pause"} else if cancel_backlog {"channel.cancel_backlog"} else {"channel.resume"};
+    audit::record(&mut tx,&actor,action,"channel",id,cancel_backlog.then_some(cancelled_messages)).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(
         json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled,"cancelled_messages":cancelled_messages}),
@@ -412,20 +431,22 @@ pub(crate) async fn delete_channel(
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let config: Option<(Value,)> =
-        sqlx::query_as("SELECT config FROM channels WHERE id=$1 FOR UPDATE")
+    let config: Option<(String,Value,bool)> =
+        sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    if let Some((config,)) = config {
+    if let Some((kind,config,encrypted)) = config {
+        let config=secrets::open_config(id,&kind,&config,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
         require_template_editor(&principal.role, &config, None)?;
     }
-    sqlx::query("DELETE FROM channels WHERE id=$1")
+    let deleted=sqlx::query("DELETE FROM channels WHERE id=$1")
         .bind(id)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    if deleted.rows_affected()>0 {audit::record(&mut tx,&principal,"channel.delete","channel",id,None).await.map_err(db_error)?;}
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -458,7 +479,7 @@ pub(crate) async fn test_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
+    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
         .await

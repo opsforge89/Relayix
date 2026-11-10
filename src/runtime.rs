@@ -126,10 +126,12 @@ pub async fn maintenance(db: PgPool, days: u32, mut stop: tokio::sync::watch::Re
             sqlx::query("DELETE FROM delivery_retry_batches WHERE expires_at<NOW()").execute(&db).await?;
             sqlx::query("DELETE FROM login_attempts WHERE window_started_at<NOW()-INTERVAL '15 minutes'").execute(&db).await?;
             sqlx::query("DELETE FROM sessions WHERE expires_at<NOW()").execute(&db).await?;
+            expiration::expire(&db).await?;
+            sqlx::query("DELETE FROM audit_log WHERE id IN (SELECT id FROM audit_log WHERE created_at<NOW()-INTERVAL '180 days' ORDER BY created_at LIMIT 1000)").execute(&db).await?;
             if days>0 {
                 // Bound each sweep and preserve events that still have pending work.
                 sqlx::query("DELETE FROM events WHERE id IN (SELECT e.id FROM events e WHERE e.created_at<NOW()-($1::int*INTERVAL '1 day') AND NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.event_id=e.id AND d.status IN ('queued','processing')) AND NOT EXISTS(SELECT 1 FROM event_groups g JOIN deliveries d ON d.event_id=g.leader_event_id WHERE g.id=e.group_id AND d.status IN ('queued','processing')) ORDER BY e.created_at LIMIT 1000)").bind(days as i32).execute(&db).await?;
-                sqlx::query("DELETE FROM alert_deliveries WHERE id IN (SELECT id FROM alert_deliveries WHERE created_at<NOW()-($1::int*INTERVAL '1 day') AND status IN ('sent','failed','cancelled') ORDER BY created_at LIMIT 1000)").bind(days as i32).execute(&db).await?;
+                sqlx::query("DELETE FROM alert_deliveries WHERE id IN (SELECT id FROM alert_deliveries WHERE created_at<NOW()-($1::int*INTERVAL '1 day') AND status IN ('sent','failed','cancelled','expired') ORDER BY created_at LIMIT 1000)").bind(days as i32).execute(&db).await?;
             }
             Ok(())
         }.await;

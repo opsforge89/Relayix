@@ -40,6 +40,7 @@ struct Factor {
     last_step: i64,
     locked_until: Option<DateTime<Utc>>,
     generation: Uuid,
+    secrets_encrypted: bool,
 }
 pub async fn consume(db: &PgPool, id: Uuid, code: &str) -> Result<(bool, Option<Uuid>)> {
     let mut tx = db.begin().await?;
@@ -54,7 +55,7 @@ async fn consume_in(
     login: bool,
 ) -> Result<(bool, Option<Uuid>)> {
     let row: Option<Factor> = sqlx::query_as(
-        "SELECT secret,last_step,locked_until,generation FROM user_totp WHERE user_id=$1 FOR UPDATE",
+        "SELECT secret,last_step,locked_until,generation,secrets_encrypted FROM user_totp WHERE user_id=$1 FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut **tx)
@@ -64,6 +65,7 @@ async fn consume_in(
         last_step: last,
         locked_until: locked,
         generation,
+        secrets_encrypted:encrypted,
     }) = row
     else {
         return Ok((true, None));
@@ -71,6 +73,7 @@ async fn consume_in(
     if login && locked.is_some_and(|date| date > Utc::now()) {
         return Ok((false, Some(generation)));
     }
+    let secret=secrets::open_text(id,"secret",&secret,encrypted)?;
     let step = if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) {
         authenticator(&secret, "account")?
             .check(code, Utc::now().timestamp().max(0) as u64)
@@ -202,14 +205,18 @@ pub async fn setup(
             "Unable to prepare authenticator",
         )
     })?;
-    let updated=sqlx::query("UPDATE user_totp SET pending_secret=$2,pending_expires_at=NOW()+INTERVAL '10 minutes' WHERE user_id=$1 AND secret IS NULL")
-        .bind(id).bind(&secret).execute(&s.db).await.map_err(db_error)?;
+    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let encoded=secrets::seal_text(id,"pending",&secret).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt authenticator secret"))?;
+    let updated=sqlx::query("UPDATE user_totp SET pending_secret=$2,pending_expires_at=NOW()+INTERVAL '10 minutes',secrets_encrypted=$3 WHERE user_id=$1 AND secret IS NULL")
+        .bind(id).bind(encoded).bind(secrets::enabled()).execute(&mut *tx).await.map_err(db_error)?;
     if updated.rows_affected() != 1 {
         return Err(err(
             StatusCode::CONFLICT,
             "Two-factor authentication is already enabled",
         ));
     }
+    audit::record(&mut tx,&actor,"totp.prepare","user",id,None).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(
         json!({"secret":secret,"uri":uri,"expires_in":600,"algorithm":"SHA1","digits":6,"period":30}),
     ))
@@ -223,14 +230,15 @@ pub async fn enable(
     let id = actor.id.unwrap();
     settings_available(&s, &h, id).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let row:Option<(String,Option<DateTime<Utc>>)>=sqlx::query_as("SELECT pending_secret,pending_expires_at FROM user_totp WHERE user_id=$1 AND secret IS NULL AND pending_secret IS NOT NULL AND pending_expires_at>NOW() FOR UPDATE")
+    let row:Option<(String,Option<DateTime<Utc>>,bool)>=sqlx::query_as("SELECT pending_secret,pending_expires_at,secrets_encrypted FROM user_totp WHERE user_id=$1 AND secret IS NULL AND pending_secret IS NOT NULL AND pending_expires_at>NOW() FOR UPDATE")
         .bind(id).fetch_optional(&mut *tx).await.map_err(db_error)?;
-    let (secret, _) = row.ok_or_else(|| {
+    let (secret, _,encrypted) = row.ok_or_else(|| {
         err(
             StatusCode::BAD_REQUEST,
             "Enrollment expired; start setup again",
         )
     })?;
+    let secret=secrets::open_text(id,"pending",&secret,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt authenticator secret"))?;
     let step = authenticator(&secret, &actor.username)
         .ok()
         .and_then(|auth| auth.check(input.code.trim(), Utc::now().timestamp().max(0) as u64));
@@ -239,8 +247,9 @@ pub async fn enable(
         failed_settings(&s, &h, id).await.map_err(db_error)?;
         return Err(err(StatusCode::BAD_REQUEST, "Invalid authenticator code"));
     };
-    sqlx::query("UPDATE user_totp SET secret=pending_secret,pending_secret=NULL,pending_expires_at=NULL,enabled_at=NOW(),last_step=$2,failures=0,locked_until=NULL WHERE user_id=$1")
-        .bind(id).bind(step as i64).execute(&mut *tx).await.map_err(db_error)?;
+    let active=secrets::seal_text(id,"secret",&secret).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt authenticator secret"))?;
+    sqlx::query("UPDATE user_totp SET secret=$3,secrets_encrypted=$4,pending_secret=NULL,pending_expires_at=NULL,enabled_at=NOW(),last_step=$2,failures=0,locked_until=NULL WHERE user_id=$1")
+        .bind(id).bind(step as i64).bind(active).bind(secrets::enabled()).execute(&mut *tx).await.map_err(db_error)?;
     sqlx::query("DELETE FROM totp_recovery_codes WHERE user_id=$1")
         .bind(id)
         .execute(&mut *tx)
@@ -266,6 +275,7 @@ pub async fn enable(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    audit::record(&mut tx,&actor,"totp.enable","user",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"enabled":true,"recovery_codes":codes})))
 }
@@ -308,6 +318,7 @@ pub async fn disable(
         .map_err(db_error)?;
     sqlx::query("UPDATE sessions SET totp_settings_failures=0,totp_settings_locked_until=NULL WHERE user_id=$1 AND token_hash=$2")
         .bind(id).bind(hash(auth::session_token(&h).unwrap_or(""))).execute(&mut *tx).await.map_err(db_error)?;
+    audit::record(&mut tx,&actor,"totp.disable","user",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"enabled":false})))
 }
@@ -339,6 +350,7 @@ pub async fn recover(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    audit::record(&mut tx,&actor,"totp.recover","user",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }

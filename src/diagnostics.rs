@@ -209,7 +209,7 @@ pub async fn channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     auth::authenticated(&h, &s).await?;
-    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
+    let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
         .await
@@ -231,15 +231,16 @@ pub async fn draft(
     let principal = auth::authenticated(&h, &s).await?;
     require_template_editor(&principal.role, &draft.config, None)?;
     if let Some(id) = draft.id {
-        let old: Option<(Value, String)> =
-            sqlx::query_as("SELECT config,kind FROM channels WHERE id=$1")
+        let old: Option<(Value, String,bool)> =
+            sqlx::query_as("SELECT config,kind,secrets_encrypted FROM channels WHERE id=$1")
                 .bind(id)
                 .fetch_optional(&s.db)
                 .await
                 .map_err(db_error)?;
         let old = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-        require_template_editor(&principal.role, &draft.config, Some(&old.0))?;
-        restore_masked(&mut draft.config, &old.0, &draft.kind, &old.1)
+        let plain=secrets::open_config(id,&old.1,&old.0,old.2).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
+        require_template_editor(&principal.role, &draft.config, Some(&plain))?;
+        restore_masked(&mut draft.config, &plain, &draft.kind, &old.1)
             .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     }
     let c = Channel {

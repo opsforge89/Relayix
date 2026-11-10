@@ -161,7 +161,7 @@ pub(crate) async fn create_route(
     h: HeaderMap,
     Json(input): Json<RouteInput>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h, &s).await?;
     valid_route(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let id = Uuid::new_v4();
     let slug = input
@@ -205,6 +205,7 @@ pub(crate) async fn create_route(
             .await
             .map_err(db_error)?;
     }
+    audit::record(&mut tx,&actor,"route.create","route",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(
         json!({"id":id,"token":token,"slug":slug,"route_name":input.name,"endpoint":format!("/h/{slug}")}),
@@ -216,7 +217,7 @@ pub(crate) async fn update_route(
     Path(id): Path<Uuid>,
     Json(input): Json<RouteInput>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h, &s).await?;
     valid_route(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let old: Option<(String,)> = sqlx::query_as("SELECT slug FROM routes WHERE id=$1")
         .bind(id)
@@ -272,6 +273,7 @@ pub(crate) async fn update_route(
             .await
             .map_err(db_error)?;
     }
+    audit::record(&mut tx,&actor,"route.update","route",id,None).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -280,12 +282,15 @@ pub(crate) async fn delete_route(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
-    sqlx::query("DELETE FROM routes WHERE id=$1")
+    let actor=auth::authenticated(&h, &s).await?;
+    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let deleted=sqlx::query("DELETE FROM routes WHERE id=$1")
         .bind(id)
-        .execute(&s.db)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    if deleted.rows_affected()>0 {audit::record(&mut tx,&actor,"route.delete","route",id,None).await.map_err(db_error)?;}
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
 pub(crate) async fn rotate_route(
@@ -293,16 +298,19 @@ pub(crate) async fn rotate_route(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h, &s).await?;
+    let mut tx=s.db.begin().await.map_err(db_error)?;
     let token = key();
     let result: Option<(String, String)> =
         sqlx::query_as("UPDATE routes SET token_hash=$2 WHERE id=$1 RETURNING slug,name")
             .bind(id)
             .bind(hash(&token))
-            .fetch_optional(&s.db)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
     let (slug, name) = result.ok_or_else(|| err(StatusCode::NOT_FOUND, "Route not found"))?;
+    audit::record(&mut tx,&actor,"route.rotate_key","route",id,None).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(
         json!({"token":token,"route_name":name,"endpoint":format!("/h/{slug}")}),
     ))

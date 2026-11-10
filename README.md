@@ -61,7 +61,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Release image: `ghcr.io/opsforge89/relayix:0.10.0`.
+Release image: `ghcr.io/opsforge89/relayix:0.11.0`.
 
 Change the app image tag in `compose.yaml`, then run:
 
@@ -91,3 +91,5 @@ Current interface with fictional demonstration data.
 ## License
 
 [Apache-2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and service icons.
+
+Message TTL, administrator audit history, optional AES-GCM credential storage and full password-encrypted backup/restore are described in [the reference](docs/REFERENCE.md#message-lifetime-audit-and-encrypted-recovery).

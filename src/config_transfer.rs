@@ -170,7 +170,7 @@ pub async fn export(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Bundle
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    let channels: Vec<Channel> = sqlx::query_as("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels ORDER BY id LIMIT 501")
+    let channels: Vec<Channel> = sqlx::query_as("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels ORDER BY id LIMIT 501")
         .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;
@@ -242,21 +242,23 @@ pub async fn import(
     h: HeaderMap,
     Json(bundle): Json<Bundle>,
 ) -> ApiResult<Value> {
-    auth::require_admin(&h, &s).await?;
+    let actor=auth::require_admin(&h, &s).await?;
     validate(&bundle).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let mut ids = HashMap::new();
     for channel in &bundle.channels {
         let id = Uuid::new_v4();
         ids.insert(channel.key, id);
-        sqlx::query("INSERT INTO channels(id,name,kind,config,enabled) VALUES($1,$2,$3,$4,false)")
+        sqlx::query("INSERT INTO channels(id,name,kind,config,enabled,secrets_encrypted) VALUES($1,$2,$3,$4,false,$5)")
             .bind(id)
             .bind(channel.name.trim())
             .bind(&channel.kind)
-            .bind(&channel.config)
+            .bind(secrets::seal_config(id,&channel.kind,&channel.config).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt channel credentials"))?)
+            .bind(secrets::enabled())
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;
+        audit::record(&mut tx,&actor,"config.channel_import","channel",id,None).await.map_err(db_error)?;
     }
     for route in &bundle.routes {
         let id = Uuid::new_v4();
@@ -264,6 +266,7 @@ pub async fn import(
         // No original endpoint/token is imported or exported, and no active route is changed.
         sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,payload_rules,rate_limit_per_minute) VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,$9)")
             .bind(id).bind(route.name.trim()).bind(slug).bind(hash(&key())).bind(route.min_priority).bind(&route.required_tag).bind(&route.icon).bind(json!(route.payload_rules)).bind(route.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
+        audit::record(&mut tx,&actor,"config.route_import","route",id,None).await.map_err(db_error)?;
         if !route.delivery_settings.is_null() {
             delivery_policy::Settings::parse(&route.delivery_settings)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;

@@ -199,6 +199,7 @@ async fn enqueue(
                 "Invalid route delivery settings",
             )
         })?;
+    let expires_at=schedule.expiry(policy.ttl_seconds,now);
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let payload_hash = hash(&if !files.is_empty() {
         json!({"payload":payload,"schedule":schedule,"files":files}).to_string()
@@ -322,9 +323,10 @@ async fn enqueue(
         .unwrap();
         scheduled_at = policy.allowed_at(scheduled_at.max(closes), event.priority);
     }
-    if policy.quiet_enabled || grouping.is_some() || schedule.explicit() {
+    if policy.quiet_enabled || grouping.is_some() || schedule.explicit() || expires_at.is_some() {
         routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
     }
+    if expires_at.is_some() {routing["delivery_policy"]["expires_at"]=json!(expires_at);}
     if let Some(role) = preview_role {
         let would_queue = routing["recipients"]
             .as_array()
@@ -342,7 +344,7 @@ async fn enqueue(
         if would_queue > 0 {
             routing["reason"] = json!("would_queue");
         }
-        let channels: Vec<Channel> = sqlx::query_as("SELECT c.id,c.name,c.kind,c.config,c.enabled,c.manual_paused,c.manual_pause_until,c.created_at FROM channels c WHERE EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id) ORDER BY LOWER(c.name),c.id")
+        let channels: Vec<Channel> = sqlx::query_as("SELECT c.id,c.name,c.kind,c.config,c.enabled,c.manual_paused,c.manual_pause_until,c.created_at,c.secrets_encrypted FROM channels c WHERE EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id) ORDER BY LOWER(c.name),c.id")
             .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
         let presentations = channels.into_iter().map(|c| {
             let presentation = message::preview(&c.kind, &c.config, &event.title, &event.message, event.priority, role=="admin")
@@ -400,9 +402,10 @@ async fn enqueue(
     sqlx::query("INSERT INTO events(id,route_id,title,message,priority,tags,payload,routing,idempotency_hash,payload_hash,rendered_payload,template_snapshot,template_result) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
         .bind(event_id).bind(endpoint.id).bind(&event.title).bind(&event.message).bind(event.priority)
         .bind(json!(event.tags)).bind(payload).bind(&routing).bind(idempotency).bind(payload_hash).bind(if snapshot.is_some(){Some(effective)}else{None}).bind(snapshot).bind(template_result).execute(&mut *tx).await.map_err(db_error)?;
-    sqlx::query("UPDATE events SET deliver_at=$2 WHERE id=$1")
+    sqlx::query("UPDATE events SET deliver_at=$2,expires_at=$3 WHERE id=$1")
         .bind(event_id)
         .bind(scheduled_at)
+        .bind(expires_at)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
@@ -455,11 +458,12 @@ async fn enqueue(
         .iter()
         .filter(|recipient| recipient["queued"] == true)
     {
-        sqlx::query("INSERT INTO deliveries(id,event_id,channel_id,not_before,next_attempt_at) VALUES($1,$2,$3,$4,$4)")
+        sqlx::query("INSERT INTO deliveries(id,event_id,channel_id,not_before,next_attempt_at,expires_at) VALUES($1,$2,$3,$4,$4,$5)")
             .bind(Uuid::new_v4())
             .bind(event_id)
             .bind(Uuid::parse_str(recipient["id"].as_str().unwrap()).unwrap())
             .bind(scheduled_at)
+            .bind(expires_at)
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;

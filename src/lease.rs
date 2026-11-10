@@ -37,7 +37,7 @@ fn candidate(
     let mut query = sqlx::QueryBuilder::new("SELECT c.id,(");
     query.push(PROXIED).push(") FROM channels c LEFT JOIN channel_health h ON h.channel_id=c.id JOIN LATERAL (SELECT MIN(d.created_at) AS oldest FROM ")
         .push(table)
-        .push(" d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW()) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE NOT (c.manual_paused AND (c.manual_pause_until IS NULL OR c.manual_pause_until>NOW())) AND (h.paused_until IS NULL OR (h.paused_until<=NOW() AND (")
+        .push(" d WHERE d.channel_id=c.id AND ((d.status='queued' AND d.next_attempt_at<=NOW() AND d.not_before<=NOW() AND (d.expires_at IS NULL OR d.expires_at>NOW())) OR (d.status='processing' AND d.locked_at<NOW()-INTERVAL '2 minutes'))) ready ON ready.oldest IS NOT NULL WHERE NOT (c.manual_paused AND (c.manual_pause_until IS NULL OR c.manual_pause_until>NOW())) AND (h.paused_until IS NULL OR (h.paused_until<=NOW() AND (")
         .push(ACTIVE).push(")=0)) AND ")
         .push(ACTIVE).push(" < ").push_bind(limit)
         .push(" AND (NOT (").push(PROXIED).push(") OR (").push(PROXY_ACTIVE).push(") < ").push_bind(proxy_limit).push(") ORDER BY ready.oldest,c.id");
