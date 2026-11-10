@@ -96,6 +96,18 @@ try:
     sql("UPDATE deliveries SET expires_at=NOW()-INTERVAL '1 second' WHERE event_id='" + future['event_id'] + "'")
     result = ok('/api/deliveries/retry-batch/' + batch['batch_id'], {}, 'POST')
     assert result['queued'] == 0 and result['skipped'] == 1
+    # File-only messages keep their original attachment even after scheduled expiry.
+    file_channel = ok('/api/channels', {'name': 'TTL file destination', 'kind': 'mattermost', 'config': {'url': 'http://mock:8000', 'mode': 'bot', 'bot_token': credentials['mattermost_token'], 'target': 'channel', 'channel_id': 'ttlfiles' + suffix[:10]}})['id']
+    channels.append(file_channel)
+    file_route = route(file_channel, {})
+    boundary = 'ttl' + suffix
+    file_body = b'PK\x03\x04\x00\xfffile'
+    multipart = b'--' + boundary.encode() + b'\r\nContent-Disposition: form-data; name="files"; filename="expired.xlsx"\r\nContent-Type: application/octet-stream\r\n\r\n' + file_body + b'\r\n--' + boundary.encode() + b'--\r\n'
+    req = urllib.request.Request(BASE + file_route['endpoint'] + '/files', data=multipart, headers={'X-Relay-Key': file_route['token'], 'X-Relay-TTL': '1', 'X-Relay-Delay': '3600', 'Content-Type': 'multipart/form-data; boundary=' + boundary})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        file_event = json.load(response)
+    wait(lambda: sql("SELECT status||':'||attempts FROM deliveries WHERE event_id='" + file_event['event_id'] + "'") == 'expired:0')
+    assert ok('/api/events/' + file_event['event_id'])['attachments'][0]['sha256'] == __import__('hashlib').sha256(file_body).hexdigest()
     ok('/api/channels/' + channel + '/resume', {}, 'POST', headers=member)
     healthy = send(delayed, body={'message': 'Healthy traffic', 'ttl': 'source-specific 5m'})
     wait(lambda: sql("SELECT status FROM deliveries WHERE event_id='" + healthy['event_id'] + "'") == 'sent')

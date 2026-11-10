@@ -136,6 +136,8 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         # A stale replica cannot overwrite an encrypted row with plaintext.
         denied = subprocess.run(compose + ['exec', '-T', 'db', 'psql', '-U', 'relayix', '-d', 'relayix', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE channels SET secrets_encrypted=false WHERE id='" + channel + "'"], env=env, capture_output=True)
         assert denied.returncode != 0
+        denied = subprocess.run(compose + ['exec', '-T', 'db', 'psql', '-U', 'relayix', '-d', 'relayix', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE channels SET config=jsonb_set(config,'{bot_token}','\"plaintext\"') WHERE id='" + channel + "'"], env=env, capture_output=True)
+        assert denied.returncode != 0
         body = b'PK\x03\x04\x00\xff\x80' + secrets.token_bytes(32)
         boundary = 'relayix' + secrets.token_hex(10)
         multipart = b'--' + boundary.encode() + b'\r\nContent-Disposition: form-data; name="files"; filename="report.xlsx"\r\nContent-Type: application/octet-stream\r\n\r\n' + body + b'\r\n--' + boundary.encode() + b'--\r\n'

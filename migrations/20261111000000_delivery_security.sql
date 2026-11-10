@@ -24,12 +24,25 @@ CREATE TABLE secrets_state (
 );
 
 CREATE FUNCTION enforce_secret_storage_mode() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE value JSONB;
 BEGIN
- IF NOT NEW.secrets_encrypted AND EXISTS(SELECT 1 FROM secrets_state) THEN
-  IF TG_TABLE_NAME='channels' THEN
+ IF TG_TABLE_NAME='channels' THEN
+  IF NOT NEW.secrets_encrypted AND EXISTS(SELECT 1 FROM secrets_state) THEN
    RAISE EXCEPTION 'Credentials must be encrypted; restart all application replicas with SECRETS_KEY' USING ERRCODE='23514';
-  ELSIF NEW.secret IS NOT NULL OR NEW.pending_secret IS NOT NULL THEN
+  END IF;
+  IF NEW.secrets_encrypted THEN
+   FOR value IN SELECT item.value FROM jsonb_each(NEW.config) item WHERE item.key IN ('bot_token','token','access_token','password','webhook_secret','url','user','proxy_username','proxy_password','proxy_secret','api_hash','chat_access_hash','body_template') LOOP
+    IF value<>'null'::jsonb AND value<>'""'::jsonb AND (jsonb_typeof(value)<>'string' OR (value #>> '{}') NOT LIKE 'v1:%') THEN
+     RAISE EXCEPTION 'Encrypted credential format required' USING ERRCODE='23514';
+    END IF;
+   END LOOP;
+  END IF;
+ ELSE
+  IF NOT NEW.secrets_encrypted AND EXISTS(SELECT 1 FROM secrets_state) AND (NEW.secret IS NOT NULL OR NEW.pending_secret IS NOT NULL) THEN
    RAISE EXCEPTION 'Credentials must be encrypted; restart all application replicas with SECRETS_KEY' USING ERRCODE='23514';
+  END IF;
+  IF NEW.secrets_encrypted AND ((NEW.secret IS NOT NULL AND NEW.secret NOT LIKE 'v1:%') OR (NEW.pending_secret IS NOT NULL AND NEW.pending_secret NOT LIKE 'v1:%')) THEN
+   RAISE EXCEPTION 'Encrypted credential format required' USING ERRCODE='23514';
   END IF;
  END IF;
  RETURN NEW;
