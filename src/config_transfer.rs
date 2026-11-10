@@ -242,7 +242,7 @@ pub async fn import(
     h: HeaderMap,
     Json(bundle): Json<Bundle>,
 ) -> ApiResult<Value> {
-    let actor=auth::require_admin(&h, &s).await?;
+    let actor = auth::require_admin(&h, &s).await?;
     validate(&bundle).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let mut ids = HashMap::new();
@@ -258,7 +258,16 @@ pub async fn import(
             .execute(&mut *tx)
             .await
             .map_err(db_error)?;
-        audit::record(&mut tx,&actor,"config.channel_import","channel",id,None).await.map_err(db_error)?;
+        audit::record(
+            &mut tx,
+            &actor,
+            "config.channel_import",
+            "channel",
+            id,
+            None,
+        )
+        .await
+        .map_err(db_error)?;
     }
     for route in &bundle.routes {
         let id = Uuid::new_v4();
@@ -266,7 +275,9 @@ pub async fn import(
         // No original endpoint/token is imported or exported, and no active route is changed.
         sqlx::query("INSERT INTO routes(id,name,slug,token_hash,enabled,min_priority,required_tag,icon,payload_rules,rate_limit_per_minute) VALUES($1,$2,$3,$4,false,$5,$6,$7,$8,$9)")
             .bind(id).bind(route.name.trim()).bind(slug).bind(hash(&key())).bind(route.min_priority).bind(&route.required_tag).bind(&route.icon).bind(json!(route.payload_rules)).bind(route.rate_limit_per_minute).execute(&mut *tx).await.map_err(db_error)?;
-        audit::record(&mut tx,&actor,"config.route_import","route",id,None).await.map_err(db_error)?;
+        audit::record(&mut tx, &actor, "config.route_import", "route", id, None)
+            .await
+            .map_err(db_error)?;
         if !route.delivery_settings.is_null() {
             delivery_policy::Settings::parse(&route.delivery_settings)
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;

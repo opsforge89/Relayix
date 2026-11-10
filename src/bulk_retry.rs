@@ -40,7 +40,7 @@ pub async fn preview(
     } else {
         DELIVERY_CONDITION.to_owned()
     };
-    let condition=format!("{condition} AND (d.expires_at IS NULL OR d.expires_at>NOW())");
+    let condition = format!("{condition} AND (d.expires_at IS NULL OR d.expires_at>NOW())");
     macro_rules! bind {
         ($q:expr) => {
             $q.bind(&filter.status)

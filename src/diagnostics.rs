@@ -231,14 +231,19 @@ pub async fn draft(
     let principal = auth::authenticated(&h, &s).await?;
     require_template_editor(&principal.role, &draft.config, None)?;
     if let Some(id) = draft.id {
-        let old: Option<(Value, String,bool)> =
+        let old: Option<(Value, String, bool)> =
             sqlx::query_as("SELECT config,kind,secrets_encrypted FROM channels WHERE id=$1")
                 .bind(id)
                 .fetch_optional(&s.db)
                 .await
                 .map_err(db_error)?;
         let old = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-        let plain=secrets::open_config(id,&old.1,&old.0,old.2).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
+        let plain = secrets::open_config(id, &old.1, &old.0, old.2).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unable to decrypt channel credentials",
+            )
+        })?;
         require_template_editor(&principal.role, &draft.config, Some(&plain))?;
         restore_masked(&mut draft.config, &plain, &draft.kind, &old.1)
             .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;

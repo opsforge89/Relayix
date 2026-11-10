@@ -29,6 +29,7 @@ python3 tests/startup.py
 python3 tests/upgrade.py
 python3 tests/compose_quickstart.py
 python3 tests/compose_databases.py
+python3 tests/security_0110.py
 docker run --rm -v "$PWD/tests:/tests:ro" --entrypoint python3 "$RELAYIX_TEST_IMAGE" /tests/telegram_transport.py
 docker run --rm -v "$PWD/tests:/tests:ro" --entrypoint python3 "$RELAYIX_TEST_IMAGE" /tests/faketls.py
 docker build -f tests/checks.Dockerfile -t "$RELAYIX_TEST_CHECKS_IMAGE" tests
@@ -46,6 +47,8 @@ docker build -f tests/browser.Dockerfile -t "$RELAYIX_TEST_BROWSER_IMAGE" tests
 "${compose[@]}" run --rm browser python /tests/features_090_browser.py
 "${compose[@]}" run --rm checks python /tests/attachments_0100.py
 "${compose[@]}" run --rm browser python /tests/attachments_0100_browser.py
+"${compose[@]}" run --rm checks python /tests/features_0110.py
+"${compose[@]}" run --rm browser python /tests/features_0110_browser.py
 "${compose[@]}" run --rm checks python /tests/cached_plans.py
 "${compose[@]}" run --rm checks python /tests/release_083.py
 python3 tests/runtime_083.py

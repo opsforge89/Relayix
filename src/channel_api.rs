@@ -12,13 +12,25 @@ pub(crate) struct Channel {
     pub(crate) manual_pause_until: Option<DateTime<Utc>>,
     pub(crate) created_at: DateTime<Utc>,
 }
-impl<'r> FromRow<'r,sqlx::postgres::PgRow> for Channel {
-    fn from_row(row:&'r sqlx::postgres::PgRow)->sqlx::Result<Self> {
+impl<'r> FromRow<'r, sqlx::postgres::PgRow> for Channel {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> sqlx::Result<Self> {
         use sqlx::Row;
-        let id:Uuid=row.try_get("id")?;let kind:String=row.try_get("kind")?;
-        let cfg:Value=row.try_get("config")?;let encrypted:bool=row.try_get("secrets_encrypted")?;
-        let config=secrets::open_config(id,&kind,&cfg,encrypted).map_err(|e|sqlx::Error::Decode(e.into()))?;
-        Ok(Self{id,kind,config,name:row.try_get("name")?,enabled:row.try_get("enabled")?,manual_paused:row.try_get("manual_paused")?,manual_pause_until:row.try_get("manual_pause_until")?,created_at:row.try_get("created_at")?})
+        let id: Uuid = row.try_get("id")?;
+        let kind: String = row.try_get("kind")?;
+        let cfg: Value = row.try_get("config")?;
+        let encrypted: bool = row.try_get("secrets_encrypted")?;
+        let config = secrets::open_config(id, &kind, &cfg, encrypted)
+            .map_err(|e| sqlx::Error::Decode(e.into()))?;
+        Ok(Self {
+            id,
+            kind,
+            config,
+            name: row.try_get("name")?,
+            enabled: row.try_get("enabled")?,
+            manual_paused: row.try_get("manual_paused")?,
+            manual_pause_until: row.try_get("manual_pause_until")?,
+            created_at: row.try_get("created_at")?,
+        })
     }
 }
 #[derive(Deserialize)]
@@ -211,8 +223,13 @@ pub(crate) async fn create_channel(
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let id = Uuid::new_v4();
-    let mut tx=s.db.begin().await.map_err(db_error)?;
-    let encoded=secrets::seal_config(id,&input.kind,&input.config).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt channel credentials"))?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    let encoded = secrets::seal_config(id, &input.kind, &input.config).map_err(|_| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to encrypt channel credentials",
+        )
+    })?;
     sqlx::query("INSERT INTO channels (id,name,kind,config,enabled,secrets_encrypted) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(id)
         .bind(input.name.trim())
@@ -223,7 +240,9 @@ pub(crate) async fn create_channel(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    audit::record(&mut tx,&principal,"channel.create","channel",id,None).await.map_err(db_error)?;
+    audit::record(&mut tx, &principal, "channel.create", "channel", id, None)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"id":id})))
 }
@@ -242,8 +261,14 @@ pub(crate) async fn update_channel(
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    let (old, old_kind,encrypted) = old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-    let old=secrets::open_config(id,&old_kind,&old,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
+    let (old, old_kind, encrypted) =
+        old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
+    let old = secrets::open_config(id, &old_kind, &old, encrypted).map_err(|_| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to decrypt channel credentials",
+        )
+    })?;
     require_template_editor(&principal.role, &input.config, Some(&old))?;
     restore_masked(&mut input.config, &old, &input.kind, &old_kind)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
@@ -252,17 +277,24 @@ pub(crate) async fn update_channel(
     network::validate(&input.config)
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    let encoded=secrets::seal_config(id,&input.kind,&input.config).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to encrypt channel credentials"))?;
-    sqlx::query("UPDATE channels SET name=$2,kind=$3,config=$4,enabled=$5,secrets_encrypted=$6 WHERE id=$1")
-        .bind(id)
-        .bind(input.name.trim())
-        .bind(input.kind)
-        .bind(encoded)
-        .bind(input.enabled.unwrap_or(true))
-        .bind(secrets::enabled())
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
+    let encoded = secrets::seal_config(id, &input.kind, &input.config).map_err(|_| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to encrypt channel credentials",
+        )
+    })?;
+    sqlx::query(
+        "UPDATE channels SET name=$2,kind=$3,config=$4,enabled=$5,secrets_encrypted=$6 WHERE id=$1",
+    )
+    .bind(id)
+    .bind(input.name.trim())
+    .bind(input.kind)
+    .bind(encoded)
+    .bind(input.enabled.unwrap_or(true))
+    .bind(secrets::enabled())
+    .execute(&mut *tx)
+    .await
+    .map_err(db_error)?;
     // A validated save is an explicit recovery action for this channel and both queues.
     sqlx::query("DELETE FROM channel_health WHERE channel_id=$1")
         .bind(id)
@@ -279,7 +311,9 @@ pub(crate) async fn update_channel(
             .await
             .map_err(db_error)?;
     }
-    audit::record(&mut tx,&principal,"channel.update","channel",id,None).await.map_err(db_error)?;
+    audit::record(&mut tx, &principal, "channel.update", "channel", id, None)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -374,14 +408,20 @@ async fn set_manual_pause(
         ));
     }
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let config: Option<(String,Value,bool)> =
+    let config: Option<(String, Value, bool)> =
         sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    let (kind,config,encrypted)=config.ok_or_else(||err(StatusCode::NOT_FOUND,"Channel not found"))?;
-    let config=secrets::open_config(id,&kind,&config,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
+    let (kind, config, encrypted) =
+        config.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
+    let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to decrypt channel credentials",
+        )
+    })?;
     require_template_editor(&actor.role, &config, Some(&config))?;
     sqlx::query("UPDATE channels SET manual_paused=$2,manual_pause_until=$3 WHERE id=$1")
         .bind(id)
@@ -417,8 +457,23 @@ async fn set_manual_pause(
                 .map_err(db_error)?;
         }
     }
-    let action=if paused {"channel.pause"} else if cancel_backlog {"channel.cancel_backlog"} else {"channel.resume"};
-    audit::record(&mut tx,&actor,action,"channel",id,cancel_backlog.then_some(cancelled_messages)).await.map_err(db_error)?;
+    let action = if paused {
+        "channel.pause"
+    } else if cancel_backlog {
+        "channel.cancel_backlog"
+    } else {
+        "channel.resume"
+    };
+    audit::record(
+        &mut tx,
+        &actor,
+        action,
+        "channel",
+        id,
+        cancel_backlog.then_some(cancelled_messages),
+    )
+    .await
+    .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(
         json!({"ok":true,"paused":paused,"until":until,"cancelled":cancelled,"cancelled_messages":cancelled_messages}),
@@ -431,22 +486,31 @@ pub(crate) async fn delete_channel(
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let config: Option<(String,Value,bool)> =
+    let config: Option<(String, Value, bool)> =
         sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
             .bind(id)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    if let Some((kind,config,encrypted)) = config {
-        let config=secrets::open_config(id,&kind,&config,encrypted).map_err(|_|err(StatusCode::INTERNAL_SERVER_ERROR,"Unable to decrypt channel credentials"))?;
+    if let Some((kind, config, encrypted)) = config {
+        let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unable to decrypt channel credentials",
+            )
+        })?;
         require_template_editor(&principal.role, &config, None)?;
     }
-    let deleted=sqlx::query("DELETE FROM channels WHERE id=$1")
+    let deleted = sqlx::query("DELETE FROM channels WHERE id=$1")
         .bind(id)
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    if deleted.rows_affected()>0 {audit::record(&mut tx,&principal,"channel.delete","channel",id,None).await.map_err(db_error)?;}
+    if deleted.rows_affected() > 0 {
+        audit::record(&mut tx, &principal, "channel.delete", "channel", id, None)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }

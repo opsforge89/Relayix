@@ -28,7 +28,7 @@ pub async fn find(
     if deliveries.is_empty()
         || deliveries
             .iter()
-            .any(|(status, attempts,expired)| status != "queued" || *attempts != 0 || *expired)
+            .any(|(status, attempts, expired)| status != "queued" || *attempts != 0 || *expired)
     {
         return Ok(None);
     }

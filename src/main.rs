@@ -164,8 +164,10 @@ async fn no_store(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args=env::args().collect::<Vec<_>>();
-    if args.get(1).map(String::as_str)==Some("backup-stream") {return backup::run(args.get(2).map(String::as_str).unwrap_or("")).await;}
+    let args = env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("backup-stream") {
+        return backup::run(args.get(2).map(String::as_str).unwrap_or("")).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -278,8 +280,8 @@ async fn main() -> Result<()> {
             post(alerts::retry_personal),
         )
         .route("/tags", get(tags))
-        .route("/audit-log",get(audit::list))
-        .route("/security/storage",get(secrets::state))
+        .route("/audit-log", get(audit::list))
+        .route("/security/storage", get(secrets::state))
         .route("/auth/profile", axum::routing::put(auth::profile))
         .route("/users", get(auth::users).post(auth::create_user))
         .route(

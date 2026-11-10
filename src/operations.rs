@@ -181,7 +181,7 @@ async fn finish(
     let mut tx = s.db.begin().await?;
     channel_health::lock(&mut tx, channel).await?;
     let row:Option<(Uuid,bool,i32,bool)>=sqlx::query_as("SELECT event_id,is_fallback,cycle_attempts,COALESCE(expires_at<=NOW(),false) FROM deliveries WHERE id=$1 AND attempts=$2 AND status='processing' FOR UPDATE").bind(id).bind(number).fetch_optional(&mut *tx).await?;
-    let Some((event_id, is_fallback, cycle_attempts,expired)) = row else {
+    let Some((event_id, is_fallback, cycle_attempts, expired)) = row else {
         return Ok(());
     };
     let plan = result
@@ -231,7 +231,7 @@ async fn deliver_owned(
             .await;
         match channel {
             Ok(Some(c)) if c.enabled => {
-                expiration::ensure_live(&s.db,id).await?;
+                expiration::ensure_live(&s.db, id).await?;
                 let files = attachments::for_delivery(&s.db, id).await?;
                 attachments::deliver(s, &c, &payload, priority, id, &files).await
             }

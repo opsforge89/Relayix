@@ -199,7 +199,7 @@ async fn enqueue(
                 "Invalid route delivery settings",
             )
         })?;
-    let expires_at=schedule.expiry(policy.ttl_seconds,now);
+    let expires_at = schedule.expiry(policy.ttl_seconds, now);
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let payload_hash = hash(&if !files.is_empty() {
         json!({"payload":payload,"schedule":schedule,"files":files}).to_string()
@@ -326,7 +326,9 @@ async fn enqueue(
     if policy.quiet_enabled || grouping.is_some() || schedule.explicit() || expires_at.is_some() {
         routing["delivery_policy"] = json!({"not_before":scheduled_at,"quiet_hours":policy.quiet_enabled,"timezone":policy.timezone,"grouping":grouping.map(|v|v.0),"window_seconds":grouping.map(|v|v.1)});
     }
-    if expires_at.is_some() {routing["delivery_policy"]["expires_at"]=json!(expires_at);}
+    if expires_at.is_some() {
+        routing["delivery_policy"]["expires_at"] = json!(expires_at);
+    }
     if let Some(role) = preview_role {
         let would_queue = routing["recipients"]
             .as_array()
