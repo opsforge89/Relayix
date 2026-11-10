@@ -11,6 +11,7 @@
   "POSTGRES_SSLROOTCERT": "",
   "POSTGRES_IMAGE": "postgres:17.11-trixie",
   "POSTGRES_CLIENT_IMAGE": "postgres:17.11-trixie",
+  "SECRETS_KEY": "",
   "ADMIN_USERNAME": "admin",
   "COOKIE_SECURE": "false",
   "TELEGRAM_API_ID": "",

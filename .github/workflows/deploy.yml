@@ -33,6 +33,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: ${{ secrets.RELAYIX_POSTGRES_PASSWORD }}
           ADMIN_TOKEN: ${{ secrets.RELAYIX_ADMIN_TOKEN }}
+          SECRETS_KEY: ${{ secrets.RELAYIX_SECRETS_KEY }}
           ADMIN_PASSWORD: ${{ secrets.RELAYIX_ADMIN_PASSWORD }}
           ADMIN_USERNAME: ${{ vars.RELAYIX_ADMIN_USERNAME }}
           BIND_ADDRESS: ${{ vars.RELAYIX_BIND_ADDRESS }}

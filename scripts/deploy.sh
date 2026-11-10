@@ -65,6 +65,8 @@ if candidate:
     current_db=database_settings(config);candidate_db=database_settings(incoming)
     if any(current_db[key]!=candidate_db[key] for key in ['mode','host','port','user','database']):
         raise SystemExit('Database destination differs from the active deployment; transfer data before switching databases')
+    if config.get('SECRETS_KEY') and incoming.get('SECRETS_KEY') != config['SECRETS_KEY']:
+        raise SystemExit('Secret storage key differs from active deployment; refusing replacement or removal')
     config=incoming
 config.pop('RELAYIX_IMAGE',None)
 compose_path=Path('compose.yaml')

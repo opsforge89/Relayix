@@ -224,7 +224,9 @@ def main():
         else:
             restore_backup(deployment, args.path.resolve(), args.replace)
         print('Encrypted backup ' + ('exported' if args.operation == 'export' else 'restored') + ' successfully')
-    except (BackupError, OSError, ValueError, KeyError, StopIteration):
+    except BackupError as error:
+        raise SystemExit(str(error)) from None
+    except (OSError, ValueError, KeyError, StopIteration):
         raise SystemExit('Backup operation failed. Verify password, backup integrity, private configuration, disk space and Docker/PostgreSQL access. No secrets were printed.') from None
     finally:
         if deployment:

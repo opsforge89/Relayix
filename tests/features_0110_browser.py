@@ -22,7 +22,7 @@ with sync_playwright() as playwright:
     expect(page.get_by_role('heading', name='Stored credential encryption', exact=True)).to_be_visible()
     expect(page.get_by_text('Database credential encryption disabled', exact=True)).to_be_visible()
     page.locator('nav').get_by_role('button', name='Routes', exact=True).click()
-    page.get_by_role('button', name='Add route', exact=True).click()
+    page.get_by_role('button', name='Add Route', exact=True).click()
     expect(page.get_by_label('Message TTL (seconds)', exact=True)).to_have_value('0')
     page.get_by_label('Message TTL (seconds)', exact=True).fill('3600')
     expect(page.get_by_text('X-Relay-TTL may shorten this limit.', exact=False)).to_be_visible()
