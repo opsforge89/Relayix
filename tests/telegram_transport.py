@@ -104,3 +104,21 @@ if hasattr(module,'pin_proxy_dns'):
         except OSError:pass
     finally:socket.getaddrinfo=original
     print('PASS: WEB proxy DNS pinning preserves hostname and blocks alternate resolutions')
+
+# Files stay in memory and preserve topic and deterministic document message IDs.
+import base64
+class FileClient(FakeClient):
+    async def upload_file(self,content,*,file_name):
+        assert content.read()==b'PK\x00\xffxlsx-report'
+        assert file_name=='report.xlsx' and content.name==file_name
+        seen.append('uploaded')
+        return types.InputFile(id=1,parts=1,name=file_name,md5_checksum='')
+file_data={**data,'files':[{'name':'report.xlsx','content_type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','data':base64.b64encode(b'PK\x00\xffxlsx-report').decode()}]}
+seen.clear();asyncio.run(module.deliver(file_data,FileClient))
+request=seen[-2];first_id=request.random_id
+assert isinstance(request, module.functions.messages.SendMediaRequest)
+assert request.reply_to.reply_to_msg_id==42 and request.media.attributes[0].file_name=='report.xlsx'
+seen.clear();asyncio.run(module.deliver({**file_data,'text':''},FileClient))
+assert seen[-2].random_id==first_id
+assert not any(isinstance(item,module.functions.messages.SendMessageRequest) for item in seen)
+print('PASS: MTProto/WEB upload document bytes in memory, preserve filenames/topics and reuse stable per-delivery media IDs')

@@ -12,6 +12,7 @@ Relayix receives webhooks and delivers notifications to your messengers and serv
 
 - 13 integrations, including Telegram, Mattermost, Slack, Discord, Matrix and email.
 - One webhook for multiple recipients, with optional titles, tags and priority.
+- Native files and standalone documents for Telegram and Mattermost bot/API, with durable private attachment history.
 - Automatic Telegram and Mattermost formatting for bold text and links.
 - Delivery history, per-channel diagnostics, retries and fallback recipients.
 - Message templates with categorized JSON fields, computed test status, preview and version history.
@@ -60,7 +61,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Release image: `ghcr.io/opsforge89/relayix:0.9.2`.
+Release image: `ghcr.io/opsforge89/relayix:0.10.0`.
 
 Change the app image tag in `compose.yaml`, then run:
 

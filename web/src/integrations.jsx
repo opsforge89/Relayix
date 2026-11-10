@@ -8,13 +8,13 @@ export const groups = [
  {name:'Other', kinds:['webhook']},
 ];
 export const integrations = {
- telegram:{label:'Telegram',description:'Send notifications via Telegram bot',help:'Topic ID is optional. Enter the numeric forum topic ID to post into a specific Telegram topic.',fields:[{key:'bot_token',label:'Bot token',secret:true},{key:'chat_id',label:'Chat ID',placeholder:'-1001234567890'},{key:'message_thread_id',label:'Topic ID',type:'number',max:2147483647,optional:true,placeholder:'42'}]},
+ telegram:{label:'Telegram',description:'Send notifications via Telegram bot',help:'Topic ID is optional. Files are supported with direct, HTTP, MTProto and WEB connections. Text and documents can arrive as separate messages. Enter the numeric forum topic ID to post into a specific Telegram topic.',fields:[{key:'bot_token',label:'Bot token',secret:true},{key:'chat_id',label:'Chat ID',placeholder:'-1001234567890'},{key:'message_thread_id',label:'Topic ID',type:'number',max:2147483647,optional:true,placeholder:'42'}]},
  slack:{label:'Slack',description:'Send notifications to a Slack channel via webhook'},
  discord:{label:'Discord',description:'Send notifications to a Discord channel via webhook'},
  teams:{label:'Microsoft Teams',description:'Send notifications via a compatible Teams webhook'},
  google_chat:{label:'Google Chat',description:'Send notifications to a Google Chat space via webhook'},
  matrix:{label:'Matrix',description:'Send notifications to a Matrix room (Element, etc.)',help:'Invite the bot account to a room with encryption disabled. Enter the room ID, not its #alias. Encrypted rooms are not supported.',fields:[{key:'url',label:'Homeserver URL',secret:true,placeholder:'https://matrix.example.org'},{key:'access_token',label:'Access token',secret:true},{key:'room_id',label:'Room ID',placeholder:'!room:example.org'}]},
- mattermost:{label:'Mattermost',description:'Send via webhook or bot API, to a channel or direct message',help:'Use a webhook URL, or a bot / personal access token. Add the sender to its channel. Direct messages can target a user or bot by @username or user ID.'},
+ mattermost:{label:'Mattermost',description:'Send via webhook or bot API, to a channel or direct message',help:'Use a webhook URL, or a bot / personal access token. Add the sender to its channel. Direct messages can target a user or bot by @username or user ID. File attachments require bot/API mode; incoming webhooks accept text only.'},
  rocket_chat:{label:'Rocket.Chat',description:'Send notifications to a Rocket.Chat channel via webhook'},
  ntfy:{label:'Ntfy',description:'Send push notifications via ntfy (self-hostable)',fields:[{key:'url',label:'Server URL',secret:true,placeholder:'https://ntfy.sh'},{key:'topic',label:'Topic',placeholder:'my-alerts'}]},
  pushover:{label:'Pushover',description:'Send push notifications via Pushover',fields:[{key:'token',label:'Application API token',secret:true},{key:'user',label:'User / group key',secret:true}]},

@@ -122,12 +122,15 @@ pub async fn transport(
     diagnose: bool,
     html: bool,
 ) -> Result<Value> {
+    transport_files(cfg,text,delivery_id,diagnose,html,&[]).await
+}
+async fn transport_files(cfg:&Value,text:&str,delivery_id:Uuid,diagnose:bool,html:bool,files:&[attachments::File])->Result<Value> {
     validate(cfg)?;
     static TRANSPORT_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
     let _permit = TRANSPORT_SLOTS.acquire().await?;
     tokio::time::timeout(
         Duration::from_secs(60),
-        transport_inner(cfg, text, delivery_id, diagnose, html),
+        transport_inner(cfg, text, delivery_id, diagnose, html,files),
     )
     .await
     .map_err(|_| anyhow!("Delivery attempt timed out"))?
@@ -139,6 +142,7 @@ async fn transport_inner(
     delivery_id: Uuid,
     diagnose: bool,
     html: bool,
+    files: &[attachments::File],
 ) -> Result<Value> {
     network::validate(cfg).await?;
     let mut pinned = cfg.clone();
@@ -178,8 +182,10 @@ async fn transport_inner(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| anyhow!("Telegram transport could not start"))?;
+    use base64::{engine::general_purpose::STANDARD,Engine};
+    let uploaded=files.iter().map(|file|json!({"name":file.name,"content_type":file.content_type,"data":STANDARD.encode(&file.data)})).collect::<Vec<_>>();
     let payload = serde_json::to_vec(
-        &json!({"config":cfg,"text":text,"delivery_id":delivery_id,"action":if diagnose{"diagnose"}else{"send"},"parse_mode":if html{Some("HTML")}else{None}}),
+        &json!({"config":cfg,"text":text,"delivery_id":delivery_id,"action":if diagnose{"diagnose"}else{"send"},"parse_mode":if html{Some("HTML")}else{None},"files":uploaded}),
     )?;
     let mut stdin = child.stdin.take().unwrap();
     stdin
@@ -214,6 +220,10 @@ pub async fn send(cfg: &Value, text: &str, delivery_id: Uuid, html: bool) -> Res
     transport(cfg, text, delivery_id, false, html)
         .await
         .map(|_| ())
+}
+
+pub async fn send_files(cfg:&Value,text:&str,delivery_id:Uuid,html:bool,files:&[attachments::File])->Result<()> {
+    transport_files(cfg,text,delivery_id,false,html,files).await.map(|_|())
 }
 
 #[cfg(test)]
