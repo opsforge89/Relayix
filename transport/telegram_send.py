@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """One bounded MTProto delivery. Secrets arrive on stdin, never argv or disk."""
 import asyncio
+import base64
+import io
 import json
 import logging
 import sys
@@ -84,8 +86,18 @@ async def deliver(data, factory=TelegramClient):
         reply = types.InputReplyToMessage(reply_to_msg_id=int(topic)) if topic else None
         random_id = int.from_bytes(uuid.UUID(data['delivery_id']).bytes[:8], 'big', signed=True)
         text, entities = formatted_text(data['text']) if data.get('parse_mode') == 'HTML' else (data['text'], [])
-        await client(functions.messages.SendMessageRequest(peer=peer, message=text, entities=entities,
-                     random_id=random_id, reply_to=reply, no_webpage=True))
+        if text:
+            await client(functions.messages.SendMessageRequest(peer=peer, message=text, entities=entities,
+                         random_id=random_id, reply_to=reply, no_webpage=True))
+        for index, document in enumerate(data.get('files', [])):
+            content = io.BytesIO(base64.b64decode(document['data'], validate=True))
+            content.name = document['name']
+            uploaded = await client.upload_file(content, file_name=document['name'])
+            media = types.InputMediaUploadedDocument(file=uploaded, mime_type=document['content_type'],
+                        attributes=[types.DocumentAttributeFilename(file_name=document['name'])])
+            file_random_id = int.from_bytes(uuid.uuid5(uuid.UUID(data['delivery_id']), 'file:'+str(index)).bytes[:8], 'big', signed=True)
+            await client(functions.messages.SendMediaRequest(peer=peer, media=media, message='',
+                         random_id=file_random_id, reply_to=reply))
     finally:
         await client.disconnect()
 
@@ -143,8 +155,8 @@ def pin_proxy_dns(cfg):
 
 def main():
     try:
-        raw = sys.stdin.buffer.read(128 * 1024 + 1)
-        if len(raw) > 128 * 1024:
+        raw = sys.stdin.buffer.read(16 * 1024 * 1024 + 1)
+        if len(raw) > 16 * 1024 * 1024:
             raise ValueError('Request too large')
         data = json.loads(raw)
         pin_proxy_dns(data['config'])

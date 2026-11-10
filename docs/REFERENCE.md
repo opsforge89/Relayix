@@ -158,6 +158,30 @@ For an absolute date, replace the delay header with `X-Relay-Deliver-At: 2026-11
 
 Scheduled events survive restarts, respect manual pauses and quiet hours, and consume no transport attempts while waiting. Manual retries and the send-all resume option do not bypass the original schedule. The cancel-backlog option also cancels scheduled deliveries. Route test and preview endpoints accept the same scheduling headers; previews store nothing and show the earliest delivery time and grouping policy. Reusing an `Idempotency-Key` with a different schedule returns `409`, just as changing the payload does.
 
+### File attachments
+
+`POST /h/{slug}/files` accepts `multipart/form-data` authenticated with the same `X-Relay-Key` as the JSON webhook. Include 1–5 multipart fields named `files`, each with a filename, content type and binary contents. An optional text field named `payload` contains the usual notification JSON object. Omit `payload` for a standalone file. Text and files may also be submitted as separate events; Relayix does not guess that adjacent requests belong together.
+
+The ordinary `/h/{slug}` JSON endpoint is unchanged. Source JSON fields named `attachments`, `document`, or `file` remain source data; they never download external URLs or decode file bytes. This endpoint receives uploaded bytes, not Telegram `file_id` values or links to existing provider files.
+
+| Destination | Native file behavior |
+| --- | --- |
+| Mattermost bot/API | Uploads bytes and posts the returned `file_ids` with the notification text. Supports channel and direct-message destinations. The bot must be allowed to upload files. |
+| Mattermost incoming webhook | Text only. Switch to bot/API mode for files. |
+| Telegram direct/HTTP Bot API | Sends notification text first, then documents. Multiple files use a document media group. Topic IDs apply to both text and documents. |
+| Telegram MTProto/WEB | Uploads documents in memory and sends them after the text, retaining topic IDs and stable per-delivery media IDs across retries. |
+| Other integrations | Native file forwarding is not implemented in this release. File requests return `400` when any enabled recipient or fallback uses an unsupported mode, rather than dropping the attachment. |
+
+Limits: five files and **10 MiB total binary data per request**, plus at most 64 KiB of JSON. Existing title/message limits still apply. Filenames must contain 1–240 UTF-8 bytes without directory separators or control characters. Four uploads can be received concurrently, with a 30-second upload deadline. Files are sent as documents without inspecting or executing their contents.
+
+Files are stored in the existing private PostgreSQL database; no public download service or extra filesystem volume is required. The shared storage budget is **1 GiB**, charging at least 4 KiB per file to bound tiny-file metadata as well. Budget accounting is transactional across replicas. A full budget returns `507` and rolls back the incoming event; oversize uploads return `413`. The database operator can adjust `attachment_storage.limit_bytes` without deleting files. Existing files are retained if the limit is lowered below current use; new uploads wait until enough capacity is freed.
+
+Pauses, explicit schedules, quiet hours and fallback preserve the original bytes. Grouping combines events only when their complete ordered file sets match by filename, content type and SHA-256; different file sets form separate groups, including in digests. A grouped delivery forwards one copy of the shared file set. Uploads count against the route quota and include file fingerprints in idempotency checks. Reusing an `Idempotency-Key` with different bytes or file metadata returns `409`.
+
+Mattermost uploads and Bot API text/document steps acknowledged by the provider are retained per delivery and channel configuration, so a later failed step can reuse them. Delivery remains at least once: a network failure before an acknowledgement is recorded can produce a duplicate. MTProto uses stable message identifiers for document retries. Changing destination credentials/configuration starts new provider steps.
+
+**Incoming webhooks → Details → Attachments** lists the original files and permits authenticated downloads. Downloads always use attachment disposition, never inline rendering; route keys alone cannot download stored history. Deleting/expiring an event cascades to its files and releases storage. The normal event-retention rules preserve files while their delivery/group leader still has pending work. Cancelled deliveries retain history and files until normal retention expires.
+
 ### Connection examples
 
 Open a route's **Integration guide** for **curl**, **Python** or **Bash** snippets with its actual endpoint and editable title/message. Python uses the standard library; Bash uses curl. Optionally paste the saved route key to fill the examples, or replace `YOUR_ROUTE_KEY` yourself. The key is kept only in the open dialog and is not stored. Running an example sends a real notification; copying or editing it sends nothing.

@@ -170,6 +170,10 @@ fn report(endpoint: &Endpoint, event: &Event, destinations: Vec<Destination>) ->
     }
 }
 
+struct Submission {
+    schedule: crate::delivery_policy::Schedule,
+    files: Vec<crate::attachments::File>,
+}
 async fn enqueue(
     s: &AppState,
     endpoint: Endpoint,
@@ -177,8 +181,9 @@ async fn enqueue(
     test: bool,
     preview_role: Option<&str>,
     idempotency: Option<String>,
-    schedule: crate::delivery_policy::Schedule,
+    submission: Submission,
 ) -> ApiResult<Value> {
+    let Submission { schedule, files } = submission;
     let mut event = parse_event(&payload).map_err(|message| {
         tracing::warn!(route_id=%endpoint.id, reason="invalid_payload", error=message, test, "webhook payload rejected");
         err(StatusCode::BAD_REQUEST, message)
@@ -195,7 +200,9 @@ async fn enqueue(
             )
         })?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
-    let payload_hash = hash(&if schedule.explicit() {
+    let payload_hash = hash(&if !files.is_empty() {
+        json!({"payload":payload,"schedule":schedule,"files":files}).to_string()
+    } else if schedule.explicit() {
         json!({"payload":payload,"schedule":schedule}).to_string()
     } else {
         payload.to_string()
@@ -226,9 +233,15 @@ async fn enqueue(
                 .as_array()
                 .map(|items| items.iter().filter(|r| r["queued"] == true).count())
                 .unwrap_or(0);
-            return Ok(Json(
-                json!({"event_id":id,"queued":queued,"routing":routing,"duplicate":true}),
-            ));
+            tx.commit().await.map_err(db_error)?;
+            let mut result =
+                json!({"event_id":id,"queued":queued,"routing":routing,"duplicate":true});
+            if !files.is_empty() {
+                result["attachments"] = json!(crate::attachments::metadata(&s.db, id)
+                    .await
+                    .map_err(db_error)?);
+            }
+            return Ok(Json(result));
         }
     }
     let rules: Vec<crate::payload_rules::Rule> =
@@ -261,6 +274,7 @@ async fn enqueue(
                 .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
             if crate::message::event_title(&rendered).trim().is_empty()
                 && crate::message::event_message(&rendered).trim().is_empty()
+                && files.is_empty()
             {
                 return Err(err(StatusCode::BAD_REQUEST,"Template could not produce a message; provide its required fields or an original title/message"));
             }
@@ -283,6 +297,16 @@ async fn enqueue(
         .collect::<Vec<_>>());
     if let Some(result) = &template_result {
         routing["template"] = result.clone();
+    }
+    if !files.is_empty() && routing["matched"] == true {
+        let targets:Vec<(String,Value)>=sqlx::query_as("SELECT c.kind,c.config FROM channels c WHERE c.enabled AND (EXISTS(SELECT 1 FROM route_channels r WHERE r.route_id=$1 AND r.channel_id=c.id) OR EXISTS(SELECT 1 FROM route_fallback_channels f WHERE f.route_id=$1 AND f.channel_id=c.id))")
+            .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+        if targets
+            .iter()
+            .any(|(kind, cfg)| !crate::attachments::supported(kind, cfg))
+        {
+            return Err(err(StatusCode::BAD_REQUEST,"Files require Telegram or Mattermost bot/API mode for every enabled recipient and fallback"));
+        }
     }
     let mut scheduled_at = policy.allowed_at(requested, event.priority);
     let grouping = if routing["matched"] == true {
@@ -338,7 +362,9 @@ async fn enqueue(
     }
     let group_key=grouping.map(|(kind,seconds)|{
         let content=if kind=="dedup"{json!({"title":event.title,"message":event.message,"priority":event.priority,"tags":event.tags})}else{json!("digest")};
-        crate::hash(&json!({"kind":kind,"bucket":now.timestamp().div_euclid(seconds),"content":content,"recipients":routing["recipients"],"fallback":routing["fallback_recipients"],"policy":endpoint.delivery_settings,"schedule":schedule}).to_string())
+        let mut key=json!({"kind":kind,"bucket":now.timestamp().div_euclid(seconds),"content":content,"recipients":routing["recipients"],"fallback":routing["fallback_recipients"],"policy":endpoint.delivery_settings,"schedule":schedule});
+        if !files.is_empty() {key["files"]=json!(files);}
+        crate::hash(&key.to_string())
     });
     let existing_group = if let Some(key) = &group_key {
         crate::event_groups::find(&mut tx, endpoint.id, key)
@@ -380,6 +406,7 @@ async fn enqueue(
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    crate::attachments::store(&mut tx, event_id, &files).await?;
     if let Some(group) = existing_group {
         sqlx::query("UPDATE events SET group_id=$2 WHERE id=$1")
             .bind(event_id)
@@ -397,9 +424,13 @@ async fn enqueue(
         sqlx::query("UPDATE deliveries SET not_before=GREATEST(not_before,$2),next_attempt_at=GREATEST(next_attempt_at,$2) WHERE event_id=$1 AND status='queued'")
             .bind(group.leader).bind(scheduled_at).execute(&mut *tx).await.map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
-        return Ok(Json(
-            json!({"event_id":event_id,"queued":0,"grouped":true,"group_id":group.id,"group_leader_id":group.leader,"occurrences":count,"routing":routing}),
-        ));
+        let mut result = json!({"event_id":event_id,"queued":0,"grouped":true,"group_id":group.id,"group_leader_id":group.leader,"occurrences":count,"routing":routing});
+        if !files.is_empty() {
+            result["attachments"] = json!(crate::attachments::metadata(&s.db, event_id)
+                .await
+                .map_err(db_error)?);
+        }
+        return Ok(Json(result));
     }
     if let (Some((kind, seconds)), Some(key)) = (grouping, group_key) {
         let group = Uuid::new_v4();
@@ -456,9 +487,13 @@ async fn enqueue(
         tracing::info!(%event_id, route_id=%endpoint.id, channel_id=%recipient["id"],
             reason=%recipient["reason"], test, "webhook destination excluded");
     }
-    Ok(Json(
-        json!({"event_id":event_id,"queued":queued,"routing":routing}),
-    ))
+    let mut result = json!({"event_id":event_id,"queued":queued,"routing":routing});
+    if !files.is_empty() {
+        result["attachments"] = json!(crate::attachments::metadata(&s.db, event_id)
+            .await
+            .map_err(db_error)?);
+    }
+    Ok(Json(result))
 }
 
 pub async fn ingest(
@@ -485,23 +520,7 @@ async fn ingest_inner(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
-    let endpoint = sqlx::query_as::<_, Endpoint>(
-        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE slug=$1")
-        .bind(slug).fetch_optional(&s.db).await.map_err(db_error)?
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Unknown route"))?;
-    let supplied = headers
-        .get("x-relay-key")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    if supplied.is_empty()
-        || !bool::from(
-            hash(supplied)
-                .as_bytes()
-                .ct_eq(endpoint.token_hash.as_bytes()),
-        )
-    {
-        return Err(err(StatusCode::UNAUTHORIZED, "Invalid route key"));
-    }
+    let endpoint = upload_endpoint(&s, &slug, &headers).await?;
     let idempotency = match headers.get("idempotency-key") {
         None => None,
         Some(value) => {
@@ -519,7 +538,118 @@ async fn ingest_inner(
     };
     let schedule = crate::delivery_policy::Schedule::parse(&headers)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    enqueue(&s, endpoint, payload, false, None, idempotency, schedule).await
+    enqueue(
+        &s,
+        endpoint,
+        payload,
+        false,
+        None,
+        idempotency,
+        Submission {
+            schedule,
+            files: vec![],
+        },
+    )
+    .await
+}
+
+async fn upload_endpoint(
+    s: &AppState,
+    slug: &str,
+    headers: &HeaderMap,
+) -> std::result::Result<Endpoint, (StatusCode, Json<Value>)> {
+    let endpoint = sqlx::query_as::<_, Endpoint>(
+        "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE slug=$1")
+        .bind(slug).fetch_optional(&s.db).await.map_err(db_error)?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "Unknown route"))?;
+    let supplied = headers
+        .get("x-relay-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if supplied.is_empty()
+        || !bool::from(
+            hash(supplied)
+                .as_bytes()
+                .ct_eq(endpoint.token_hash.as_bytes()),
+        )
+    {
+        return Err(err(StatusCode::UNAUTHORIZED, "Invalid route key"));
+    }
+    Ok(endpoint)
+}
+pub async fn ingest_files(
+    State(s): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let mut response = ingest_files_inner(s, slug, headers, request)
+        .await
+        .into_response();
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        response
+            .headers_mut()
+            .insert("retry-after", axum::http::HeaderValue::from_static("60"));
+    }
+    response
+}
+async fn ingest_files_inner(
+    s: AppState,
+    slug: String,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+) -> ApiResult<Value> {
+    use axum::extract::FromRequest;
+    let endpoint = upload_endpoint(&s, &slug, &headers).await?;
+    static UPLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+    let _permit = UPLOADS.try_acquire().map_err(|_| {
+        err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many concurrent file uploads",
+        )
+    })?;
+    let multipart = axum::extract::Multipart::from_request(request, &s)
+        .await
+        .map_err(|_| {
+            err(
+                StatusCode::BAD_REQUEST,
+                "Use multipart/form-data with files and an optional JSON payload field",
+            )
+        })?;
+    let (payload, files) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        crate::attachments::parse(multipart),
+    )
+    .await
+    .map_err(|_| err(StatusCode::REQUEST_TIMEOUT, "File upload timed out"))??;
+    let schedule = crate::delivery_policy::Schedule::parse(&headers)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let idempotency = headers
+        .get("idempotency-key")
+        .map(|value| {
+            let value = value
+                .to_str()
+                .map_err(|_| err(StatusCode::BAD_REQUEST, "Invalid Idempotency-Key"))?;
+            if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                return Err(err(
+                    StatusCode::BAD_REQUEST,
+                    "Idempotency-Key must contain 1–256 characters",
+                ));
+            }
+            Ok(hash(value))
+        })
+        .transpose()?;
+    enqueue(
+        &s,
+        endpoint,
+        payload,
+        false,
+        None,
+        idempotency,
+        Submission { schedule, files },
+    )
+    .await
 }
 
 pub async fn test_route(
@@ -535,7 +665,19 @@ pub async fn test_route(
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Route not found"))?;
     let schedule = crate::delivery_policy::Schedule::parse(&headers)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    enqueue(&s, endpoint, payload, true, None, None, schedule).await
+    enqueue(
+        &s,
+        endpoint,
+        payload,
+        true,
+        None,
+        None,
+        Submission {
+            schedule,
+            files: vec![],
+        },
+    )
+    .await
 }
 
 pub async fn preview_route(
@@ -556,7 +698,10 @@ pub async fn preview_route(
         true,
         Some(&principal.role),
         None,
-        schedule,
+        Submission {
+            schedule,
+            files: vec![],
+        },
     )
     .await
 }

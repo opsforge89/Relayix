@@ -1,5 +1,9 @@
 """Local HTTP providers and SMTP relay; never contacts real services."""
 import json
+import base64
+import hashlib
+from email.parser import BytesParser
+from email.policy import default as email_policy
 import time
 from runtime import credentials
 import socketserver
@@ -58,7 +62,22 @@ class HTTP(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path=='/slow':time.sleep(5)
-        body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
+        raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        if self.path == '/api/v4/files':
+            if self.headers.get('Authorization') != 'Bearer ' + credentials['mattermost_token']:
+                return self.reply(401, {'message':'Invalid token'})
+            envelope=BytesParser(policy=email_policy).parsebytes(('Content-Type: '+self.headers.get('Content-Type','')+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+raw)
+            files=[];channel=None
+            for part in envelope.iter_parts():
+                field=part.get_param('name',header='content-disposition')
+                data=part.get_payload(decode=True)
+                if field=='channel_id':channel=data.decode()
+                if field=='files':files.append({'name':part.get_filename(),'size':len(data),'sha256':hashlib.sha256(data).hexdigest(),'data':base64.b64encode(data).decode()})
+            if not channel or len(files)!=1:return self.reply(400,{'message':'Expected one file and a channel'})
+            with lock:
+                received.append({'path':self.path,'method':'POST','body':'','channel_id':channel,'files':files,'test_proxy':self.headers.get('X-Relayix-Test-Proxy')})
+            return self.reply(201,{'file_infos':[{'id':files[0]['sha256'][:26]}]})
+        body = raw.decode()
         with lock:
             received.append({'path': self.path, 'method': self.command, 'body': body,
                              'authorization': self.headers.get('Authorization'), 'test_proxy': self.headers.get('X-Relayix-Test-Proxy')})
@@ -89,6 +108,9 @@ class HTTP(BaseHTTPRequestHandler):
                     return self.reply(400, {'message': 'Invalid users'})
                 return self.reply(201, {'id': 'd' * 26})
             if self.path == '/api/v4/posts':
+                if data.get('channel_id','').startswith('retryfiles') and data.get('file_ids'):
+                    with lock:attempts=sum(1 for row in received if row.get('path')=='/api/v4/posts' and json.loads(row['body']).get('channel_id')==data['channel_id'])
+                    if attempts==1:return self.reply(503,{'message':'Retry post after upload'})
                 if data.get('channel_id') == 'forbidden':
                     return self.reply(403, {'message': 'No permission'})
                 if data.get('channel_id') == 'malformed':

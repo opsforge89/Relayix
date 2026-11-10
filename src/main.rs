@@ -1,3 +1,4 @@
+mod attachments;
 mod channel_api;
 mod channel_config;
 mod channel_health;
@@ -311,6 +312,10 @@ async fn main() -> Result<()> {
         .route("/routes/{id}/preview", post(routing::preview_route))
         .route("/events", get(operations::events))
         .route("/events/{id}", get(operations::event_details))
+        .route(
+            "/events/{id}/attachments/{file_id}",
+            get(attachments::download),
+        )
         .route("/templates", get(templates::list).post(templates::create))
         .route("/templates/preview", post(templates::preview))
         .route(
@@ -337,6 +342,10 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(health))
         .route("/h/{slug}", post(routing::ingest))
+        .route(
+            "/h/{slug}/files",
+            post(routing::ingest_files).layer(DefaultBodyLimit::max(attachments::MAX_REQUEST)),
+        )
         .nest("/api", api)
         .fallback_service(
             ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html")),

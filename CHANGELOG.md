@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 Beta — 2026-11-10
+
+- Accept bounded multipart notifications and standalone files on authenticated route file endpoints without reserving new JSON payload fields.
+- Persist original file bytes in PostgreSQL alongside incoming events, with atomic storage accounting, private authenticated downloads and existing event retention.
+- Forward native files through Mattermost bot/API channel and direct-message delivery, plus Telegram Bot API, HTTP proxies, MTProto and WEB transports.
+- Preserve files across pauses, schedules, retries and fallback. Retain acknowledged upload/send steps and separate grouping windows when file contents or metadata differ.
+- Show attachments in incoming history and document supported modes, queue behavior and upload/storage limits.
+
 ## 0.9.2 Beta — 2026-11-09
 
 - Restrict cancelling a channel's queued notifications and alerts to administrators; members can still pause and resume with sending.

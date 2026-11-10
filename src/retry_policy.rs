@@ -23,6 +23,16 @@ impl fmt::Display for Failure {
 }
 impl std::error::Error for Failure {}
 
+pub fn message(message: &'static str) -> anyhow::Error {
+    Failure {
+        category: "message",
+        permanent: true,
+        retry_after: None,
+        status: None,
+        message,
+    }
+    .into()
+}
 pub fn permanent(message: &'static str) -> anyhow::Error {
     Failure {
         category: "configuration",
