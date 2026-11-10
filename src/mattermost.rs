@@ -127,8 +127,8 @@ async fn destination(client: &reqwest::Client, cfg: &Value) -> Result<String> {
     Ok(channel)
 }
 pub async fn send(client: &reqwest::Client, cfg: &Value, text: &str) -> Result<()> {
-    let channel=destination(client,cfg).await?;
-    let token=cfg["bot_token"].as_str().unwrap();
+    let channel = destination(client, cfg).await?;
+    let token = cfg["bot_token"].as_str().unwrap();
     let post = response_json(
         client
             .post(api_url(cfg, &["posts"])?)
@@ -143,33 +143,68 @@ pub async fn send(client: &reqwest::Client, cfg: &Value, text: &str) -> Result<(
     Ok(())
 }
 
-pub async fn send_files(context:&attachments::Delivery<'_>,text:&str)->Result<()> {
-    use reqwest::multipart::{Form,Part};
-    if context.state("posted").await?.is_some() {return Ok(());}
-    let cfg=context.cfg;
-    let token=cfg["bot_token"].as_str().unwrap();
-    let channel=match context.state("channel").await? {
-        Some(channel)=>channel,
-        None=>{let channel=destination(context.client,cfg).await?;context.record("channel",&channel).await?;channel}
+pub async fn send_files(context: &attachments::Delivery<'_>, text: &str) -> Result<()> {
+    use reqwest::multipart::{Form, Part};
+    if context.state("posted").await?.is_some() {
+        return Ok(());
+    }
+    let cfg = context.cfg;
+    let token = cfg["bot_token"].as_str().unwrap();
+    let channel = match context.state("channel").await? {
+        Some(channel) => channel,
+        None => {
+            let channel = destination(context.client, cfg).await?;
+            context.record("channel", &channel).await?;
+            channel
+        }
     };
-    let mut ids=Vec::new();
-    for (position,file) in context.files.iter().enumerate() {
-        let step=format!("upload-{position}");
-        let id=match context.state(&step).await? {
-            Some(id)=>id,
-            None=>{
-                let form=Form::new().text("channel_id",channel.clone()).part("files",Part::bytes(file.data.clone()).file_name(file.name.clone()).mime_str(&file.content_type)?);
-                let response=response_json(context.client.post(api_url(cfg,&["files"])?).bearer_auth(token).timeout(Duration::from_secs(45)).multipart(form).send().await.map_err(|e|anyhow!(e.without_url()))?).await?;
-                let infos=response["file_infos"].as_array().filter(|v|v.len()==1).ok_or_else(||anyhow!("Mattermost did not return the uploaded file"))?;
-                let id=response_id(&infos[0])?.to_owned();
-                context.record(&step,&id).await?;
+    let mut ids = Vec::new();
+    for (position, file) in context.files.iter().enumerate() {
+        let step = format!("upload-{position}");
+        let id = match context.state(&step).await? {
+            Some(id) => id,
+            None => {
+                let form = Form::new().text("channel_id", channel.clone()).part(
+                    "files",
+                    Part::bytes(file.data.clone())
+                        .file_name(file.name.clone())
+                        .mime_str(&file.content_type)?,
+                );
+                let response = response_json(
+                    context
+                        .client
+                        .post(api_url(cfg, &["files"])?)
+                        .bearer_auth(token)
+                        .timeout(Duration::from_secs(45))
+                        .multipart(form)
+                        .send()
+                        .await
+                        .map_err(|e| anyhow!(e.without_url()))?,
+                )
+                .await?;
+                let infos = response["file_infos"]
+                    .as_array()
+                    .filter(|v| v.len() == 1)
+                    .ok_or_else(|| anyhow!("Mattermost did not return the uploaded file"))?;
+                let id = response_id(&infos[0])?.to_owned();
+                context.record(&step, &id).await?;
                 id
             }
         };
         ids.push(id);
     }
-    let post=response_json(context.client.post(api_url(cfg,&["posts"])?).bearer_auth(token).json(&json!({"channel_id":channel,"message":text,"file_ids":ids})).send().await.map_err(|e|anyhow!(e.without_url()))?).await?;
-    context.record("posted",response_id(&post)?).await?;
+    let post = response_json(
+        context
+            .client
+            .post(api_url(cfg, &["posts"])?)
+            .bearer_auth(token)
+            .json(&json!({"channel_id":channel,"message":text,"file_ids":ids}))
+            .send()
+            .await
+            .map_err(|e| anyhow!(e.without_url()))?,
+    )
+    .await?;
+    context.record("posted", response_id(&post)?).await?;
     Ok(())
 }
 

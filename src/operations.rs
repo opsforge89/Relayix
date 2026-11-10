@@ -82,7 +82,7 @@ pub async fn event_details(
     let group:Option<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('id',g.id,'kind',g.kind,'occurrences',g.occurrences,'leader_event_id',g.leader_event_id,'closes_at',g.closes_at,'members',(SELECT jsonb_agg(jsonb_build_object('id',m.id,'title',m.title,'message',m.message) ORDER BY m.created_at,m.id) FROM (SELECT id,title,message,created_at FROM events WHERE group_id=g.id ORDER BY created_at,id LIMIT 50) m)) FROM event_groups g JOIN events e ON e.group_id=g.id WHERE e.id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?;
     value["delivery_group"] = group.map(|g| g.0).unwrap_or(Value::Null);
-    value["attachments"]=json!(attachments::metadata(&s.db,id).await.map_err(db_error)?);
+    value["attachments"] = json!(attachments::metadata(&s.db, id).await.map_err(db_error)?);
     Ok(Json(value))
 }
 #[derive(FromRow)]
@@ -228,8 +228,8 @@ async fn deliver_owned(
             .await;
         match channel {
             Ok(Some(c)) if c.enabled => {
-                let files=attachments::for_delivery(&s.db,id).await?;
-                attachments::deliver(s,&c,&payload,priority,id,&files).await
+                let files = attachments::for_delivery(&s.db, id).await?;
+                attachments::deliver(s, &c, &payload, priority, id, &files).await
             }
             Ok(Some(_)) => Err(retry_policy::permanent("Channel disabled")),
             Ok(None) => Err(retry_policy::permanent("Channel removed")),

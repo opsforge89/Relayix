@@ -27,13 +27,6 @@ jobs:
           restore-keys: |
             pr-rust-${{ runner.os }}-1.99.1-${{ hashFiles('Cargo.lock') }}-
             pr-rust-${{ runner.os }}-1.99.1-
-      - name: Resolve attachment dependencies
-        run: cargo +1.99.1 metadata --format-version 1 > /dev/null
-      - name: Resolved lockfile
-        uses: actions/upload-artifact@v7
-        with:
-          name: attachment-lockfile
-          path: Cargo.lock
       - name: Rust formatting
         run: |
           if ! cargo +1.99.1 fmt --check; then
