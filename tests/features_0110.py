@@ -1,5 +1,6 @@
 """TTL never revives stale work; audit records successful actions without secrets."""
 import json
+import datetime
 import os
 import subprocess
 import time
@@ -71,7 +72,7 @@ try:
     first = send(r, {'X-Relay-TTL': '120', 'Idempotency-Key': suffix})
     detail = ok('/api/events/' + first['event_id'])
     deadline = detail['expires_at']
-    assert deadline and detail['routing']['delivery_policy']['expires_at'] == deadline
+    assert deadline and datetime.datetime.fromisoformat(detail['routing']['delivery_policy']['expires_at'].replace('Z', '+00:00')) == datetime.datetime.fromisoformat(deadline.replace('Z', '+00:00'))
     assert send(r, {'X-Relay-TTL': '120', 'Idempotency-Key': suffix})['duplicate']
     assert ok('/api/events/' + first['event_id'])['expires_at'] == deadline
     wait(lambda: sql("SELECT status||':'||attempts FROM deliveries WHERE event_id='" + first['event_id'] + "'") == 'expired:0')
