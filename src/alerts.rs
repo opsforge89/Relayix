@@ -480,7 +480,7 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         if !allowed {
             return Ok(Outcome::Disabled);
         }
-        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at FROM channels WHERE id=$1")
+        let channel = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
             .bind(cid)
             .fetch_optional(&s.db)
             .await?;

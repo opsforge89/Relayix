@@ -20,7 +20,7 @@ for key in ('POSTGRES_PASSWORD', 'ADMIN_TOKEN', 'ADMIN_PASSWORD'):
     if not config.get(key):
         raise SystemExit('Required private deployment value missing: ' + key)
     secrets['RELAYIX_' + key] = config[key]
-for key in ('TELEGRAM_API_ID', 'TELEGRAM_API_HASH'):
+for key in ('TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'SECRETS_KEY'):
     if config.get(key):
         secrets['RELAYIX_' + key] = config[key]
 

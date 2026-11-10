@@ -2,7 +2,7 @@ name: relayix
 services:
   app:
     container_name: ${COMPOSE_PROJECT_NAME:-relayix}-app
-    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.10.0}
+    image: ${RELAYIX_IMAGE_OVERRIDE:-ghcr.io/opsforge89/relayix:0.11.0}
     restart: unless-stopped
     stop_grace_period: 75s
     networks: [default]
@@ -21,6 +21,7 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      SECRETS_KEY: ${SECRETS_KEY:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}

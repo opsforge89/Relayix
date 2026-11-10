@@ -105,6 +105,7 @@ All settings go in `.env`; no JSON generator is needed.
 | `COOKIE_SECURE` | `false` | Set `true` when serving the UI behind HTTPS |
 | `ADMIN_TOKEN` | Empty | Optional administrator API token for automation |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | Empty | Only needed for Telegram MTProto / WEB proxies; ordinary Bot API delivery does not need them |
+| `SECRETS_KEY` | empty (opt-in) | 32-byte base64/64-hex AES-GCM key; coordinate all replicas for first migration and keep a recoverable copy outside the database |
 | `ALLOW_INSECURE_HTTP` | `false` | Allow HTTP notification destinations and unencrypted SMTP when explicitly enabled |
 | `RUST_LOG` | `relayix=info` | Application log filter |
 
@@ -226,3 +227,5 @@ Administrators can export/import channels and routes in Settings → Configurati
 Imports are atomic and append-only, limited to schema version 1, 500 channels/routes and 2 MiB. Imported records are disabled drafts with new IDs, slugs and keys; existing configuration remains unchanged. Restore credentials/URLs/custom webhook bodies, reassign message templates if needed, review recipients and rotate fresh route keys before enabling. This is a portable configuration file, not a credential or database backup.
 
 Channel creation and updates require a nonblank name of at most 100 Unicode characters without control characters; names are trimmed on save. Import uses the same validator. Export reports a failing legacy record by UUID and a bounded/escaped name, so an administrator can repair it without guessing or silently dropping configuration.
+
+For full password-encrypted backup/restore and key-loss recovery, see [the reference](REFERENCE.md#full-password-encrypted-backup).

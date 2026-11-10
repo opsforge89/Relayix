@@ -20,15 +20,15 @@ pub async fn find(
         return Ok(None);
     };
     // Ingestion and claims share the advisory lock; finishers do not change attempt counts.
-    let deliveries: Vec<(String, i32)> =
-        sqlx::query_as("SELECT status,attempts FROM deliveries WHERE event_id=$1 ORDER BY id")
+    let deliveries: Vec<(String, i32, bool)> =
+        sqlx::query_as("SELECT status,attempts,COALESCE(expires_at<=NOW(),false) FROM deliveries WHERE event_id=$1 ORDER BY id")
             .bind(leader)
             .fetch_all(&mut **tx)
             .await?;
     if deliveries.is_empty()
         || deliveries
             .iter()
-            .any(|(status, attempts)| status != "queued" || *attempts != 0)
+            .any(|(status, attempts, expired)| status != "queued" || *attempts != 0 || *expired)
     {
         return Ok(None);
     }

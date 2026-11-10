@@ -5,6 +5,7 @@ use chrono::Timelike;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub ttl_seconds: i64,
     pub quiet_enabled: bool,
     pub timezone: String,
     pub quiet_start: String,
@@ -17,6 +18,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            ttl_seconds: 0,
             quiet_enabled: false,
             timezone: "UTC".into(),
             quiet_start: "22:00".into(),
@@ -35,6 +37,9 @@ impl Settings {
         Ok(settings)
     }
     pub fn validate(&self) -> Result<()> {
+        if !(0..=2592000).contains(&self.ttl_seconds) {
+            return Err(anyhow!("TTL must be 0–2592000 seconds"));
+        }
         self.timezone
             .parse::<chrono_tz::Tz>()
             .map_err(|_| anyhow!("Use an IANA timezone such as Europe/Moscow"))?;
@@ -108,6 +113,8 @@ fn minute(value: &str) -> Result<u32> {
 }
 #[derive(Default, Serialize)]
 pub struct Schedule {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl: Option<i64>,
     delay: Option<i64>,
     deliver_at: Option<DateTime<Utc>>,
 }
@@ -126,6 +133,17 @@ impl Schedule {
                 })
                 .transpose()
         }
+        let ttl = value(headers, "x-relay-ttl")?
+            .map(|raw| {
+                if raw.is_empty() || !raw.bytes().all(|c| c.is_ascii_digit()) {
+                    return Err(anyhow!("X-Relay-TTL must be 1–2592000 whole seconds"));
+                }
+                raw.parse::<i64>()
+                    .ok()
+                    .filter(|v| (1..=2592000).contains(v))
+                    .ok_or_else(|| anyhow!("X-Relay-TTL must be 1–2592000 whole seconds"))
+            })
+            .transpose()?;
         let delay = value(headers, "x-relay-delay")?;
         let deliver_at = value(headers, "x-relay-deliver-at")?;
         if delay.is_some() && deliver_at.is_some() {
@@ -149,10 +167,22 @@ impl Schedule {
                     .map_err(|_| anyhow!("X-Relay-Deliver-At must be an RFC 3339 timestamp"))
             })
             .transpose()?;
-        Ok(Self { delay, deliver_at })
+        Ok(Self {
+            delay,
+            deliver_at,
+            ttl,
+        })
     }
     pub fn explicit(&self) -> bool {
-        self.delay.is_some() || self.deliver_at.is_some()
+        self.delay.is_some() || self.deliver_at.is_some() || self.ttl.is_some()
+    }
+    pub fn expiry(&self, route_ttl: i64, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        let ttl = match (self.ttl, route_ttl) {
+            (Some(value), route) if route > 0 => value.min(route),
+            (Some(value), _) => value,
+            (None, route) => route,
+        };
+        (ttl > 0).then(|| now + chrono::Duration::seconds(ttl))
     }
     pub fn requested_time(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
         let at = self
@@ -204,6 +234,36 @@ mod tests {
         assert_eq!(
             settings.allowed_at(at("2026-11-01T05:30:00Z"), 1),
             at("2026-11-01T08:00:00Z")
+        );
+    }
+    #[test]
+    fn ttl_is_bounded_and_cannot_extend_the_route_limit() {
+        let now = at("2026-11-11T12:00:00Z");
+        let mut headers = HeaderMap::new();
+        assert!(Schedule::default().expiry(0, now).is_none());
+        assert_eq!(
+            Schedule::default().expiry(60, now),
+            Some(now + chrono::Duration::seconds(60))
+        );
+        for value in ["0", "-1", "2592001", "1.5", "5m", ""] {
+            headers.insert("x-relay-ttl", value.parse().unwrap());
+            assert!(Schedule::parse(&headers).is_err());
+        }
+        headers.insert("x-relay-ttl", "120".parse().unwrap());
+        let schedule = Schedule::parse(&headers).unwrap();
+        assert_eq!(
+            schedule.expiry(60, now),
+            Some(now + chrono::Duration::seconds(60))
+        );
+        assert_eq!(
+            schedule.expiry(0, now),
+            Some(now + chrono::Duration::seconds(120))
+        );
+        headers.append("x-relay-ttl", "60".parse().unwrap());
+        assert!(Schedule::parse(&headers).is_err());
+        assert_eq!(
+            serde_json::to_value(Schedule::default()).unwrap(),
+            json!({"delay":null,"deliver_at":null})
         );
     }
     #[test]

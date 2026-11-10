@@ -16,7 +16,7 @@ Install Git, Docker Engine with Docker Compose v2, and Python 3.10+. Your user m
 git clone https://github.com/opsforge89/Relayix.git
 cd Relayix
 docker compose version
-docker pull ghcr.io/opsforge89/relayix:0.10.0
+docker pull ghcr.io/opsforge89/relayix:0.11.0
 ```
 
 This guide is for existing installations and automated deployments that use the private JSON wrapper. New users should follow the [standard Docker Compose setup](DEPLOYMENT.md). The published image is ready to run; source compilation is only needed for development.
@@ -202,3 +202,5 @@ scripts/compose.sh up -d
 ```
 
 After changing private settings, use `up -d` to recreate affected containers; `restart` does not reload their environment. Avoid `down -v` when retaining local data. Changing database mode or host does not transfer existing data automatically.
+
+For optional credential encryption, add `SECRETS_KEY` to the private configuration and preserve it when upgrading. Secret synchronization supports `RELAYIX_SECRETS_KEY`; deployment refuses removal or replacement of an active key. Stop every replica when first enabling encryption. [Full encrypted backup and recovery](REFERENCE.md#full-password-encrypted-backup) use the same private configuration and a separate archive password.

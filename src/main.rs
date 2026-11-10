@@ -1,4 +1,6 @@
 mod attachments;
+mod audit;
+mod backup;
 mod channel_api;
 mod channel_config;
 mod channel_health;
@@ -7,6 +9,7 @@ mod config_transfer;
 mod delivery_api;
 mod delivery_policy;
 mod event_groups;
+mod expiration;
 mod lease;
 mod retry_policy;
 mod route_api;
@@ -30,6 +33,7 @@ mod providers;
 mod proxy;
 mod routing;
 mod runtime;
+mod secrets;
 mod table;
 mod telegram;
 mod templates;
@@ -160,6 +164,10 @@ async fn no_store(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = env::args().collect::<Vec<_>>();
+    if args.get(1).map(String::as_str) == Some("backup-stream") {
+        return backup::run(args.get(2).map(String::as_str).unwrap_or("")).await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -214,8 +222,10 @@ async fn main() -> Result<()> {
     let proxy_concurrency = runtime::setting("DELIVERY_PROXY_CONCURRENCY", 2, 1, 32)?;
     let channel_concurrency = runtime::setting("DELIVERY_CHANNEL_CONCURRENCY", 2, 1, 32)?;
     let retention_days = runtime::setting("EVENT_RETENTION_DAYS", 30, 0, 3650)?;
+    secrets::configure()?;
     let db = database::connect().await?;
     sqlx::migrate!().run(&db).await.map_err(|_|anyhow!("Database migration failed; check schema permissions, migration history and database server logs"))?;
+    secrets::migrate(&db).await?;
     auth::bootstrap(&db).await?;
     let dummy_password_hash = Arc::new(auth::dummy_hash().await?);
     let client = reqwest::Client::builder()
@@ -270,6 +280,8 @@ async fn main() -> Result<()> {
             post(alerts::retry_personal),
         )
         .route("/tags", get(tags))
+        .route("/audit-log", get(audit::list))
+        .route("/security/storage", get(secrets::state))
         .route("/auth/profile", axum::routing::put(auth::profile))
         .route("/users", get(auth::users).post(auth::create_user))
         .route(
