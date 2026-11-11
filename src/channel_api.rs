@@ -290,7 +290,7 @@ pub(crate) async fn update_channel(
             .map_err(db_error)?;
     let (old, old_kind, encrypted) =
         old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-    access::channel(&s.db, &principal, id, "edit").await?;
+    access::channel(&mut *tx, &principal, id, "edit").await?;
     let old = secrets::open_config(id, &old_kind, &old, encrypted).map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -445,7 +445,7 @@ async fn set_manual_pause(
             .map_err(db_error)?;
     let (kind, config, encrypted) =
         config.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-    access::channel(&s.db, &actor, id, "edit").await?;
+    access::channel(&mut *tx, &actor, id, "edit").await?;
     let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -523,7 +523,7 @@ pub(crate) async fn delete_channel(
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    access::manage(&s.db, &principal, id).await?;
+    access::manage(&mut *tx, &principal, id).await?;
     if let Some((kind, config, encrypted)) = config {
         let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
             err(

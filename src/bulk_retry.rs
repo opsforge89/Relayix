@@ -114,8 +114,10 @@ pub async fn execute(
             "Retry preview expired; preview the current failures again",
         ));
     }
-    for delivery in &ids {
-        access::delivery(&s.db, &user, *delivery, true).await?;
+    let denied: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM deliveries d JOIN events e ON e.id=d.event_id WHERE d.id=ANY($1) AND NOT ($2 OR (relay_route_view(e.route_id,$3) AND relay_channel_access(d.channel_id,$3,'send'))))")
+        .bind(&ids).bind(user.role == "admin").bind(user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    if denied {
+        return Err(err(StatusCode::FORBIDDEN, "Delivery permission revoked"));
     }
     let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=GREATEST(NOW(),not_before),locked_at=NULL,error=NULL,error_category=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=ANY($1) AND status='failed' AND (expires_at IS NULL OR expires_at>NOW())").bind(&ids).execute(&mut *tx).await.map_err(db_error)?;
     let queued = result.rows_affected() as i32;

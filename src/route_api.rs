@@ -159,13 +159,15 @@ pub(crate) async fn routes(
             ids.retain(|x| visible.contains(&x.0));
             fallback.retain(|x| visible.contains(&x.0));
         }
-        let can_manage: bool = sqlx::query_scalar("SELECT $2 OR COALESCE(owner_user_id=$3,false) FROM routes WHERE id=$1")
-            .bind(route.id)
-            .bind(actor.role == "admin")
-            .bind(actor.id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_error)?;
+        let can_manage: bool = sqlx::query_scalar(
+            "SELECT $2 OR COALESCE(owner_user_id=$3,false) FROM routes WHERE id=$1",
+        )
+        .bind(route.id)
+        .bind(actor.role == "admin")
+        .bind(actor.id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_error)?;
         out.push(RouteResponse {
             can_manage,
             route,

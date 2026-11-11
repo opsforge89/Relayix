@@ -23,8 +23,8 @@ pub fn route_scope(actor: &auth::Principal, column: &str) -> String {
         "FALSE".into()
     }
 }
-pub async fn channel(
-    db: &PgPool,
+pub async fn channel<'a>(
+    db: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
     actor: &auth::Principal,
     id: Uuid,
     permission: &'static str,
@@ -36,7 +36,11 @@ pub async fn channel(
     }
     Ok(())
 }
-pub async fn manage(db: &PgPool, actor: &auth::Principal, id: Uuid) -> Check {
+pub async fn manage<'a>(
+    db: impl sqlx::Executor<'a, Database = sqlx::Postgres>,
+    actor: &auth::Principal,
+    id: Uuid,
+) -> Check {
     let allowed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM channels WHERE id=$1 AND ($2 OR owner_user_id=$3))",
     )
