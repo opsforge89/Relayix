@@ -150,8 +150,8 @@ def verify(api, anonymous):
         held_failure()
         blocked=str(uuid.uuid4())
         sql("INSERT INTO alert_deliveries(id,policy_id,channel_id,owner_user_id,title,message) VALUES('"+blocked+"','"+b['id']+"','"+channels[2]+"','"+users[1]+"','Disabled account fixture','Test warning')")
-        wait(lambda:sql("SELECT status FROM alert_deliveries WHERE id='"+blocked+"'")=='failed')
-        assert 'disabled' in sql("SELECT error FROM alert_deliveries WHERE id='"+blocked+"'").lower()
+        wait(lambda:sql("SELECT status FROM alert_deliveries WHERE id='"+blocked+"'")=='cancelled')
+        assert 'permission revoked' in sql("SELECT error FROM alert_deliveries WHERE id='"+blocked+"'").lower()
         one.ok('/api/auth/delivery-alerts',{**settings,'enabled':False,'destination_ids':[str(uuid.uuid4())]},'PUT')
         assert not personal(one)['enabled']
         assert one.request('/api/auth/delivery-alerts/test',{},'POST')[0]==400

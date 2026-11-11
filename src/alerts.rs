@@ -249,10 +249,6 @@ pub async fn save_personal(
 ) -> ApiResult<Value> {
     let owner = account(&h, &s).await?;
     let actor = auth::authenticated(&h, &s).await?;
-    access::recipients(&s.db, &actor, &input.destination_ids).await?;
-    for route in &input.watch_route_ids {
-        access::route(&s.db, &actor, *route, false).await?;
-    }
     if !matches!(
         input.trigger_mode.as_str(),
         "final" | "first_error" | "threshold"
@@ -262,20 +258,26 @@ pub async fn save_personal(
     let mut policy=PolicyInput{final_only:input.trigger_mode=="final",name:"Personal delivery alerts".into(),enabled:input.enabled,watch_channel_ids:vec![],watch_route_ids:input.watch_route_ids,destination_ids:input.destination_ids,failure_threshold:if input.trigger_mode=="threshold"{input.failure_threshold}else{1},min_attempts:1,window_minutes:input.window_minutes,cooldown_minutes:input.cooldown_minutes,title:"Relayix: delivery failure".into(),body:"{failures} delivery failure(s). Channel: {channel}. Route: {route}. Message: {title}. Error: {error}".into()};
     if !policy.enabled {
         policy.destination_ids =
-            sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) ORDER BY id")
+            sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) AND relay_channel_access(id,$2,'send') ORDER BY id")
                 .bind(&policy.destination_ids)
+                .bind(owner)
                 .fetch_all(&s.db)
                 .await
                 .map_err(db_error)?;
         policy.watch_route_ids =
-            sqlx::query_scalar("SELECT id FROM routes WHERE id=ANY($1) ORDER BY id")
+            sqlx::query_scalar("SELECT id FROM routes WHERE id=ANY($1) AND relay_route_view(id,$2) ORDER BY id")
                 .bind(&policy.watch_route_ids)
+                .bind(owner)
                 .fetch_all(&s.db)
                 .await
                 .map_err(db_error)?;
     }
     validate(&s, &policy).await?;
     if policy.enabled {
+        access::recipients(&s.db, &actor, &policy.destination_ids).await?;
+        for route in &policy.watch_route_ids {
+            access::route(&s.db, &actor, *route, false).await?;
+        }
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id=ANY($1) AND enabled")
                 .bind(&policy.destination_ids)

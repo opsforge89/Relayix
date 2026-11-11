@@ -131,14 +131,9 @@ pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResu
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    let scope = format!(
-        "({} OR {} OR {})",
-        access::channel_scope(&principal, "id", "view"),
-        access::channel_scope(&principal, "id", "edit"),
-        access::channel_scope(&principal, "id", "send")
-    );
-    let query=format!("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE {scope} ORDER BY created_at DESC");
-    let mut result = sqlx::query_as::<_, Channel>(&query)
+    let mut result = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE ($1 OR relay_channel_access(id,$2,'view') OR relay_channel_access(id,$2,'edit') OR relay_channel_access(id,$2,'send')) ORDER BY created_at DESC")
+        .bind(principal.role == "admin")
+        .bind(principal.id)
         .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;
