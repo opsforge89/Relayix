@@ -107,7 +107,14 @@ try:
     assert ok('/api/events/' + event, session=b)['message'] == 'Private payload'
     assert next(c for c in ok('/api/channels', session=b) if c['id'] == cid)['config']['url'] == '********'
     assert request('/api/channels/' + cid + '/test', {}, session=b)[0] == 403
+    assert request('/api/deliveries/' + delivery + '/retry', {}, session=b)[0] == 403
     assert request('/api/channels/' + cid, spec, 'PUT', session=b)[0] == 403
+    other = ok('/api/channels', {**spec, 'name': 'Unshared destination'}, session=a)['id']; channels.append(other)
+    mixed = ok('/api/routes', {'name': 'Mixed visibility', 'channel_ids': [cid], 'fallback_channel_ids': [other]}); routes.append(mixed['id'])
+    mixed_event = ok(mixed['endpoint'], {'message': 'Private fallback details'}, headers={'X-Relay-Key': mixed['token']})['event_id']
+    assert request('/api/events/' + mixed_event, session=b)[0] == 403
+    assert ok('/api/deliveries?event_id=' + mixed_event + '&group_events=true', session=b)['total'] == 0
+    assert not any(r['id'] == mixed['id'] for r in ok('/api/routes', session=b))
     assert request('/api/channels/' + cid + '/access', grant(send=True), 'PUT', session=b)[0] == 403
     assert request('/api/channels/' + cid + '/access', {'owner_user_id': bob, 'grants': []}, 'PUT', session=a)[0] == 403
 
@@ -121,6 +128,10 @@ try:
     ok('/api/channels/' + cid + '/access', grant(send=True), 'PUT', session=a)
     assert next(c for c in ok('/api/channels', session=b) if c['id'] == cid)['config'] == {}
     own_route = ok('/api/routes', {'name': 'Shared sender', 'channel_ids': [cid]}, session=b); routes.append(own_route['id'])
+    assert request('/api/routes/' + rid + '/rotate', {}, session=b)[0] == 403
+    policy = {'enabled': True, 'destination_ids': [cid], 'watch_route_ids': [], 'trigger_mode': 'final', 'failure_threshold': 1, 'window_minutes': 15, 'cooldown_minutes': 1}
+    ok('/api/auth/delivery-alerts', policy, 'PUT', session=b)
+    assert ok('/api/auth/delivery-alerts/test', {}, session=b)['queued'] == 1
     own_event = ok(own_route['endpoint'], {'message': 'Queued before revocation'}, headers={'X-Relay-Key': own_route['token']})['event_id']
     assert request('/api/events/' + event, session=b)[0] == 403
     assert request('/api/channels/' + cid + '/pause', {}, session=b)[0] == 403
@@ -133,6 +144,9 @@ try:
     ok('/api/channels/' + cid + '/access', {'owner_user_id': alice, 'grants': []}, 'PUT', session=a)
     assert request('/api/deliveries/retry-batch/' + batch['batch_id'], {}, session=b)[0] == 403
     wait(lambda: sql(f"SELECT status FROM deliveries WHERE event_id='{own_event}'") == 'cancelled')
+    wait(lambda: sql(f"SELECT COUNT(*) FROM alert_deliveries WHERE owner_user_id='{bob}' AND status='cancelled'") == '1')
+    assert request('/api/auth/delivery-alerts/test', {}, session=b)[0] == 403
+    ok('/api/auth/delivery-alerts', {**policy, 'enabled': False}, 'PUT', session=b)
     assert ok(own_route['endpoint'], {'message': 'After revocation'}, headers={'X-Relay-Key': own_route['token']})['queued'] == 0
     # Administrators retain universal control and can transfer ownership.
     ok('/api/channels/' + cid + '/access', {'owner_user_id': bob, 'grants': []}, 'PUT')

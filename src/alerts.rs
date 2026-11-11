@@ -264,13 +264,14 @@ pub async fn save_personal(
                 .fetch_all(&s.db)
                 .await
                 .map_err(db_error)?;
-        policy.watch_route_ids =
-            sqlx::query_scalar("SELECT id FROM routes WHERE id=ANY($1) AND relay_route_view(id,$2) ORDER BY id")
-                .bind(&policy.watch_route_ids)
-                .bind(owner)
-                .fetch_all(&s.db)
-                .await
-                .map_err(db_error)?;
+        policy.watch_route_ids = sqlx::query_scalar(
+            "SELECT id FROM routes WHERE id=ANY($1) AND relay_route_view(id,$2) ORDER BY id",
+        )
+        .bind(&policy.watch_route_ids)
+        .bind(owner)
+        .fetch_all(&s.db)
+        .await
+        .map_err(db_error)?;
     }
     validate(&s, &policy).await?;
     if policy.enabled {
