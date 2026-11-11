@@ -664,8 +664,8 @@ pub async fn test_route(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
-    let actor=auth::authenticated(&headers,&s).await?;
-    crate::access::route_recipients(&s.db,&actor,id).await?;
+    let actor = auth::authenticated(&headers, &s).await?;
+    crate::access::route_recipients(&s.db, &actor, id).await?;
     let endpoint = sqlx::query_as::<_, Endpoint>(
         "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?
@@ -694,7 +694,7 @@ pub async fn preview_route(
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&headers, &s).await?;
-    crate::access::route_recipients(&s.db,&principal,id).await?;
+    crate::access::route_recipients(&s.db, &principal, id).await?;
     let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(||err(StatusCode::NOT_FOUND,"Route not found"))?;
     let schedule = crate::delivery_policy::Schedule::parse(&headers)

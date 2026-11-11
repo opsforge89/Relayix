@@ -126,21 +126,37 @@ pub(crate) fn valid_config(kind: &str, cfg: &Value, allow_http: bool) -> Result<
 }
 pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
-    let scope = format!("({} OR {} OR {})",access::channel_scope(&principal,"id","view"),access::channel_scope(&principal,"id","edit"),access::channel_scope(&principal,"id","send"));
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let scope = format!(
+        "({} OR {} OR {})",
+        access::channel_scope(&principal, "id", "view"),
+        access::channel_scope(&principal, "id", "edit"),
+        access::channel_scope(&principal, "id", "send")
+    );
     let query=format!("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE {scope} ORDER BY created_at DESC");
-    let mut result=sqlx::query_as::<_,Channel>(&query).fetch_all(&s.db).await.map_err(db_error)?;
-    let mut permissions=std::collections::HashMap::new();
+    let mut result = sqlx::query_as::<_, Channel>(&query)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let mut permissions = std::collections::HashMap::new();
     for c in &mut result {
-        let (owner,view,edit,send):(Option<Uuid>,bool,bool,bool)=sqlx::query_as("SELECT owner_user_id,($2 OR relay_channel_access(id,$3,'view')),($2 OR relay_channel_access(id,$3,'edit')),($2 OR relay_channel_access(id,$3,'send')) FROM channels WHERE id=$1").bind(c.id).bind(principal.role=="admin").bind(principal.id).fetch_one(&s.db).await.map_err(db_error)?;
-        mask_for_role(&mut c.config,&principal.role);
-        if !view && !edit { c.config=json!({}); }
+        let (owner,view,edit,send):(Option<Uuid>,bool,bool,bool)=sqlx::query_as("SELECT owner_user_id,($2 OR relay_channel_access(id,$3,'view')),($2 OR relay_channel_access(id,$3,'edit')),($2 OR relay_channel_access(id,$3,'send')) FROM channels WHERE id=$1").bind(c.id).bind(principal.role=="admin").bind(principal.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+        mask_for_role(&mut c.config, &principal.role);
+        if !view && !edit {
+            c.config = json!({});
+        }
         permissions.insert(c.id,json!({"view":view,"edit":edit,"send":send,"manage":principal.role=="admin" || (principal.id.is_some() && owner==principal.id),"owner_user_id":owner}));
     }
     let health: Vec<(Uuid, Value)> = sqlx::query_as("SELECT channel_id,jsonb_build_object('consecutive_failures',consecutive_failures,'last_error',last_error,'paused_until',paused_until,'state',CASE WHEN paused_until>NOW() THEN 'paused' WHEN paused_until IS NOT NULL THEN 'probe' ELSE 'healthy' END) FROM channel_health")
-        .fetch_all(&s.db).await.map_err(db_error)?;
+        .fetch_all(&mut *tx).await.map_err(db_error)?;
     let health = health
         .into_iter()
         .collect::<std::collections::HashMap<_, _>>();
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(json!(result
         .into_iter()
         .map(|c| {
@@ -148,11 +164,15 @@ pub(crate) async fn channels(State(s): State<AppState>, h: HeaderMap) -> ApiResu
                 .get(&c.id)
                 .cloned()
                 .unwrap_or_else(|| json!({"state":"healthy","consecutive_failures":0}));
-            let permission=permissions.remove(&c.id).unwrap();
-            let visible=permission["view"]==true || permission["edit"]==true;
+            let permission = permissions.remove(&c.id).unwrap();
+            let visible = permission["view"] == true || permission["edit"] == true;
             let mut c = json!(c);
-            c["permissions"]=permission;
-            c["health"] = if visible {state} else {json!({"state":"healthy"})};
+            c["permissions"] = permission;
+            c["health"] = if visible {
+                state
+            } else {
+                json!({"state":"healthy"})
+            };
             c
         })
         .collect::<Vec<_>>())))
@@ -260,7 +280,7 @@ pub(crate) async fn update_channel(
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
     valid_channel_name(&input.name).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    access::channel(&s.db,&principal,id,"edit").await?;
+    access::channel(&s.db, &principal, id, "edit").await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let old: Option<(Value, String, bool)> =
         sqlx::query_as("SELECT config,kind,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
@@ -270,7 +290,7 @@ pub(crate) async fn update_channel(
             .map_err(db_error)?;
     let (old, old_kind, encrypted) =
         old.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-    access::channel(&s.db,&principal,id,"edit").await?;
+    access::channel(&s.db, &principal, id, "edit").await?;
     let old = secrets::open_config(id, &old_kind, &old, encrypted).map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -415,7 +435,7 @@ async fn set_manual_pause(
             "Pause expiry must be in the next 365 days",
         ));
     }
-    access::channel(&s.db,&actor,id,"edit").await?;
+    access::channel(&s.db, &actor, id, "edit").await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let config: Option<(String, Value, bool)> =
         sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
@@ -425,7 +445,7 @@ async fn set_manual_pause(
             .map_err(db_error)?;
     let (kind, config, encrypted) =
         config.ok_or_else(|| err(StatusCode::NOT_FOUND, "Channel not found"))?;
-    access::channel(&s.db,&actor,id,"edit").await?;
+    access::channel(&s.db, &actor, id, "edit").await?;
     let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -495,7 +515,7 @@ pub(crate) async fn delete_channel(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&h, &s).await?;
-    access::manage(&s.db,&principal,id).await?;
+    access::manage(&s.db, &principal, id).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let config: Option<(String, Value, bool)> =
         sqlx::query_as("SELECT kind,config,secrets_encrypted FROM channels WHERE id=$1 FOR UPDATE")
@@ -503,7 +523,7 @@ pub(crate) async fn delete_channel(
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_error)?;
-    access::manage(&s.db,&principal,id).await?;
+    access::manage(&s.db, &principal, id).await?;
     if let Some((kind, config, encrypted)) = config {
         let config = secrets::open_config(id, &kind, &config, encrypted).map_err(|_| {
             err(
@@ -554,8 +574,8 @@ pub(crate) async fn test_channel(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    let principal=auth::authenticated(&h, &s).await?;
-    access::channel(&s.db,&principal,id,"send").await?;
+    let principal = auth::authenticated(&h, &s).await?;
+    access::channel(&s.db, &principal, id, "send").await?;
     let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)

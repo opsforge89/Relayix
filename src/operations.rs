@@ -16,7 +16,7 @@ pub async fn events(
     h: HeaderMap,
     Query(q): Query<EventQuery>,
 ) -> ApiResult<Value> {
-    let actor=auth::authenticated(&h,&s).await?;
+    let actor = auth::authenticated(&h, &s).await?;
     if q.search.as_ref().is_some_and(|v| v.len() > 250)
         || q.reason.as_ref().is_some_and(|v| v.len() > 64)
     {
@@ -27,7 +27,10 @@ pub async fn events(
     let size = q.page_size.unwrap_or(25).clamp(1, 100);
     let search = q.search.filter(|v| !v.is_empty()).map(|v| format!("%{v}%"));
     let condition=" FROM events e JOIN routes r ON r.id=e.route_id WHERE ($1::uuid IS NULL OR e.route_id=$1) AND ($2::text IS NULL OR COALESCE(e.routing->>'reason','legacy')=$2) AND ($3::text IS NULL OR e.title ILIKE $3 OR e.message ILIKE $3 OR r.name ILIKE $3)";
-    let condition=format!("{condition} AND {}",access::route_scope(&actor,"e.route_id"));
+    let condition = format!(
+        "{condition} AND {}",
+        access::route_scope(&actor, "e.route_id")
+    );
     let mut count = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*)");
     count.push(&condition);
     let (total,): (i64,) = count
@@ -39,7 +42,9 @@ pub async fn events(
         .await
         .map_err(db_error)?;
     let mut rows=sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT jsonb_build_object('id',e.id,'route_id',e.route_id,'route_name',r.name,'route_icon',r.icon,'title',e.title,'message',e.message,'priority',e.priority,'tags',e.tags,'routing',e.routing,'_source',COALESCE(e.rendered_payload,e.payload),'created_at',e.created_at,'attachment_count',(SELECT COUNT(*) FROM event_attachments a WHERE a.event_id=e.id),'deliveries',(SELECT COUNT(*) FROM deliveries d WHERE d.event_id=e.id),'sent',(SELECT COUNT(*) FROM deliveries d WHERE d.event_id=e.id AND d.status='sent'))");
-    rows.push(&condition).push(order).push(" LIMIT $4 OFFSET $5");
+    rows.push(&condition)
+        .push(order)
+        .push(" LIMIT $4 OFFSET $5");
     let items: Vec<(Value,)> = rows
         .build_query_as()
         .bind(q.route_id)
@@ -68,8 +73,8 @@ pub async fn event_details(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    let actor=auth::authenticated(&h,&s).await?;
-    access::event(&s.db,&actor,id).await?;
+    let actor = auth::authenticated(&h, &s).await?;
+    access::event(&s.db, &actor, id).await?;
     let row:Option<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('id',e.id,'route_id',e.route_id,'route_name',r.name,'route_icon',r.icon,'title',e.title,'message',e.message,'priority',e.priority,'tags',e.tags,'routing',e.routing,'created_at',e.created_at,'expires_at',e.expires_at,'original_payload',e.payload,'rendered_payload',e.rendered_payload,'template',e.template_snapshot,'template_result',e.template_result,'has_title',COALESCE(e.rendered_payload,e.payload)->>'title' IS NOT NULL AND BTRIM(COALESCE(e.rendered_payload,e.payload)->>'title')<>'','recipients',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',d.id,'channel_id',c.id,'channel_name',c.name,'channel_kind',c.kind,'status',d.status,'attempts',d.attempts,'is_fallback',d.is_fallback,'error',d.error,'created_at',d.created_at,'sent_at',d.sent_at) ORDER BY LOWER(c.name),c.id) FROM deliveries d JOIN channels c ON c.id=d.channel_id WHERE d.event_id=e.id),'[]'::jsonb)) FROM events e JOIN routes r ON r.id=e.route_id WHERE e.id=$1").bind(id).fetch_optional(&s.db).await.map_err(db_error)?;
     let mut value = row
         .ok_or_else(|| err(StatusCode::NOT_FOUND, "Event not found"))?
@@ -102,8 +107,8 @@ pub async fn attempts(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    let actor=auth::authenticated(&h,&s).await?;
-    access::delivery(&s.db,&actor,id,false).await?;
+    let actor = auth::authenticated(&h, &s).await?;
+    access::delivery(&s.db, &actor, id, false).await?;
     let delivery: Option<AttemptSummary> =
         sqlx::query_as("SELECT attempts,status,is_fallback,error,next_attempt_at,channel_id,error_category FROM deliveries WHERE id=$1")
             .bind(id)
@@ -120,11 +125,18 @@ pub async fn attempts(
         error_category,
     } = delivery.ok_or_else(|| err(StatusCode::NOT_FOUND, "Delivery not found"))?;
     let items:Vec<(Value,)>=sqlx::query_as("SELECT jsonb_build_object('number',number,'started_at',started_at,'finished_at',finished_at,'status',status,'error',error,'error_category',error_category) FROM delivery_attempts WHERE delivery_id=$1 ORDER BY number DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db_error)?;
+    let can_send: bool = sqlx::query_scalar("SELECT $2 OR relay_channel_access($1,$3,'send')")
+        .bind(channel_id)
+        .bind(actor.role == "admin")
+        .bind(actor.id)
+        .fetch_one(&s.db)
+        .await
+        .map_err(db_error)?;
     let health = channel_health::status(&s.db, channel_id)
         .await
         .map_err(db_error)?;
     Ok(Json(
-        json!({"next_attempt_at":if status=="queued" {Some(next_attempt_at)} else {None},"error":error,"error_category":error_category,"channel_health":health,"delivery_id":id,"attempts":total,"status":status,"is_fallback":is_fallback,"items":items.into_iter().map(|r|r.0).collect::<Vec<_>>(),"history_limit":100,"can_retry":status=="failed"||(status=="queued"&&error.is_some())}),
+        json!({"next_attempt_at":if status=="queued" {Some(next_attempt_at)} else {None},"error":error,"error_category":error_category,"channel_health":health,"delivery_id":id,"attempts":total,"status":status,"is_fallback":is_fallback,"items":items.into_iter().map(|r|r.0).collect::<Vec<_>>(),"history_limit":100,"can_retry":can_send && (status=="failed"||(status=="queued"&&error.is_some()))}),
     ))
 }
 

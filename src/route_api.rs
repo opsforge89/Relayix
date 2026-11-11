@@ -132,29 +132,40 @@ pub(crate) async fn routes(
     State(s): State<AppState>,
     h: HeaderMap,
 ) -> ApiResult<Vec<RouteResponse>> {
-    let actor=auth::authenticated(&h,&s).await?;
-    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings,created_at FROM routes ORDER BY created_at DESC").fetch_all(&s.db).await.map_err(db_error)?;
+    let actor = auth::authenticated(&h, &s).await?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let rows=sqlx::query_as::<_,Route>("SELECT id,name,slug,enabled,min_priority,required_tag,icon,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings,created_at FROM routes WHERE ($1 OR owner_user_id=$2 OR relay_route_view(id,$2)) ORDER BY created_at DESC").bind(actor.role == "admin").bind(actor.id).fetch_all(&mut *tx).await.map_err(db_error)?;
     let mut out = Vec::new();
     for route in rows {
-        if access::route(&s.db,&actor,route.id,false).await.is_err() && access::route(&s.db,&actor,route.id,true).await.is_err() {continue;}
         let mut ids: Vec<(Uuid,)> =
             sqlx::query_as("SELECT channel_id FROM route_channels WHERE route_id=$1")
                 .bind(route.id)
-                .fetch_all(&s.db)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(db_error)?;
         let mut fallback: Vec<(Uuid,)> = sqlx::query_as(
             "SELECT channel_id FROM route_fallback_channels WHERE route_id=$1 ORDER BY channel_id",
         )
         .bind(route.id)
-        .fetch_all(&s.db)
+        .fetch_all(&mut *tx)
         .await
         .map_err(db_error)?;
-        if actor.role!="admin" {
-            let visible:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM channels WHERE relay_channel_access(id,$1,'view') OR relay_channel_access(id,$1,'edit') OR relay_channel_access(id,$1,'send')").bind(actor.id).fetch_all(&s.db).await.map_err(db_error)?;
-            ids.retain(|x|visible.contains(&x.0)); fallback.retain(|x|visible.contains(&x.0));
+        if actor.role != "admin" {
+            let visible:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM channels WHERE relay_channel_access(id,$1,'view') OR relay_channel_access(id,$1,'edit') OR relay_channel_access(id,$1,'send')").bind(actor.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+            ids.retain(|x| visible.contains(&x.0));
+            fallback.retain(|x| visible.contains(&x.0));
         }
-        let can_manage=access::route(&s.db,&actor,route.id,true).await.is_ok();
+        let can_manage: bool = sqlx::query_scalar("SELECT $2 OR COALESCE(owner_user_id=$3,false) FROM routes WHERE id=$1")
+            .bind(route.id)
+            .bind(actor.role == "admin")
+            .bind(actor.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_error)?;
         out.push(RouteResponse {
             can_manage,
             route,
@@ -162,6 +173,7 @@ pub(crate) async fn routes(
             fallback_channel_ids: fallback.into_iter().map(|x| x.0).collect(),
         });
     }
+    tx.commit().await.map_err(db_error)?;
     Ok(Json(out))
 }
 pub(crate) async fn create_route(
@@ -170,9 +182,9 @@ pub(crate) async fn create_route(
     Json(input): Json<RouteInput>,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(&h, &s).await?;
-    access::recipients(&s.db,&actor,&input.channel_ids).await?;
-    access::recipients(&s.db,&actor,&input.fallback_channel_ids).await?;
     valid_route(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    access::recipients(&s.db, &actor, &input.channel_ids).await?;
+    access::recipients(&s.db, &actor, &input.fallback_channel_ids).await?;
     let id = Uuid::new_v4();
     let slug = input
         .slug
@@ -230,10 +242,10 @@ pub(crate) async fn update_route(
     Json(input): Json<RouteInput>,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(&h, &s).await?;
-    access::route_recipients(&s.db,&actor,id).await?;
-    access::recipients(&s.db,&actor,&input.channel_ids).await?;
-    access::recipients(&s.db,&actor,&input.fallback_channel_ids).await?;
+    access::route_recipients(&s.db, &actor, id).await?;
     valid_route(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    access::recipients(&s.db, &actor, &input.channel_ids).await?;
+    access::recipients(&s.db, &actor, &input.fallback_channel_ids).await?;
     let old: Option<(String,)> = sqlx::query_as("SELECT slug FROM routes WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
@@ -300,7 +312,7 @@ pub(crate) async fn delete_route(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(&h, &s).await?;
-    access::route(&s.db,&actor,id,true).await?;
+    access::route(&s.db, &actor, id, true).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let deleted = sqlx::query("DELETE FROM routes WHERE id=$1")
         .bind(id)
@@ -321,7 +333,7 @@ pub(crate) async fn rotate_route(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
     let actor = auth::authenticated(&h, &s).await?;
-    access::route_recipients(&s.db,&actor,id).await?;
+    access::route_recipients(&s.db, &actor, id).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let token = key();
     let result: Option<(String, String)> =

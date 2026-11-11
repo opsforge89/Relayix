@@ -248,9 +248,11 @@ pub async fn save_personal(
     Json(input): Json<PersonalInput>,
 ) -> ApiResult<Value> {
     let owner = account(&h, &s).await?;
-    let actor=auth::authenticated(&h,&s).await?;
-    access::recipients(&s.db,&actor,&input.destination_ids).await?;
-    for route in &input.watch_route_ids { access::route(&s.db,&actor,*route,false).await?; }
+    let actor = auth::authenticated(&h, &s).await?;
+    access::recipients(&s.db, &actor, &input.destination_ids).await?;
+    for route in &input.watch_route_ids {
+        access::route(&s.db, &actor, *route, false).await?;
+    }
     if !matches!(
         input.trigger_mode.as_str(),
         "final" | "first_error" | "threshold"
@@ -305,8 +307,8 @@ pub async fn test_personal(State(s): State<AppState>, h: HeaderMap) -> ApiResult
                     "Save and enable your delivery alert subscription first",
                 )
             })?;
-    let actor=auth::authenticated(&h,&s).await?;
-    access::recipients(&s.db,&actor,&policy.destination_ids).await?;
+    let actor = auth::authenticated(&h, &s).await?;
+    access::recipients(&s.db, &actor, &policy.destination_ids).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let channels: Vec<Uuid> =
         sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) AND enabled")

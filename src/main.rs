@@ -120,7 +120,7 @@ async fn stats(
     h: HeaderMap,
     Query(query): Query<StatsQuery>,
 ) -> ApiResult<Value> {
-    let actor=auth::authenticated(&h,&s).await?;
+    let actor = auth::authenticated(&h, &s).await?;
     let period = query.period.as_deref().unwrap_or("30d");
     let duration = monitoring_period(period)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid monitoring period"))?;
@@ -133,7 +133,7 @@ async fn stats(
     ))
 }
 async fn tags(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<String>> {
-    let actor=auth::authenticated(&h,&s).await?;
+    let actor = auth::authenticated(&h, &s).await?;
     let tags:Vec<(String,)>=sqlx::query_as("SELECT tag FROM (SELECT required_tag AS tag FROM routes WHERE ($1 OR relay_route_view(id,$2)) AND required_tag IS NOT NULL AND required_tag<>'' UNION SELECT jsonb_array_elements_text(e.tags) AS tag FROM events e WHERE ($1 OR relay_route_view(e.route_id,$2))) all_tags ORDER BY tag LIMIT 500").bind(actor.role=="admin").bind(actor.id).fetch_all(&s.db).await.map_err(db_error)?;
     Ok(Json(tags.into_iter().map(|(tag,)| tag).collect()))
 }
