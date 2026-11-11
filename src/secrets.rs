@@ -331,7 +331,7 @@ pub async fn rotate(mode: &str) -> Result<()> {
     }
     let db = database::connect().await?;
     let mut tx = db.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout='15 seconds'")
+    sqlx::query("SET LOCAL lock_timeout='15s'")
         .execute(&mut *tx)
         .await?;
     lock(&mut tx).await?;
