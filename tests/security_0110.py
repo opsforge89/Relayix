@@ -146,6 +146,14 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         assert denied.returncode != 0
         denied = subprocess.run(compose + ['exec', '-T', 'db', 'psql', '-U', 'relayix', '-d', 'relayix', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE channels SET config=jsonb_set(config,'{bot_token}','\"plaintext\"') WHERE id='" + channel + "'"], env=env, capture_output=True)
         assert denied.returncode != 0
+        pending_user = ok('/api/users', {'username': 'rotation.pending', 'display_name': 'Pending rotation account', 'role': 'member', 'password': config['ADMIN_PASSWORD']})['id']
+        status, _, pending_headers = api('/api/auth/login', {'username': 'rotation.pending', 'password': config['ADMIN_PASSWORD']}, headers={'Authorization': ''})
+        assert status == 200
+        pending_session = {'Authorization': '', 'Cookie': pending_headers['Set-Cookie'].split(';')[0]}
+        pending_setup = ok('/api/auth/totp/setup', {'password': config['ADMIN_PASSWORD']}, headers=pending_session)
+        pending_before = sql("SELECT pending_secret FROM user_totp WHERE user_id='" + pending_user + "'")
+        replay_before = sql("SELECT generation::text||':'||last_step FROM user_totp WHERE user_id='" + user + "'")
+        recovery_before = sql("SELECT md5(string_agg(code_hash,',' ORDER BY code_hash)) FROM totp_recovery_codes WHERE user_id='" + user + "'")
         # Fail after a channel rewrite but before the TOTP rewrite; the entire transaction must roll back.
         old_master = master
         new_master = base64.b64encode(secrets.token_bytes(32)).decode()
@@ -198,6 +206,10 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         fingerprint = sql("SELECT md5(config::text) FROM channels WHERE id='" + channel + "'")
         assert saved_seed != sql("SELECT secret FROM user_totp WHERE user_id='" + user + "'")
         assert token not in raw and ok('/api/channels')[0]['config']['bot_token'] == '********'
+        assert sql("SELECT generation::text||':'||last_step FROM user_totp WHERE user_id='" + user + "'") == replay_before
+        assert sql("SELECT md5(string_agg(code_hash,',' ORDER BY code_hash)) FROM totp_recovery_codes WHERE user_id='" + user + "'") == recovery_before
+        assert sql("SELECT pending_secret FROM user_totp WHERE user_id='" + pending_user + "'") != pending_before
+        assert ok('/api/auth/totp/enable', {'code': otp(pending_setup['secret'])}, headers=pending_session)['enabled']
         print('PASS: atomic master-key rotation rollback, wrong-old-key rejection, idempotent recovery and stale-key writer rejection')
         body = b'PK\x03\x04\x00\xff\x80' + secrets.token_bytes(32)
         boundary = 'relayix' + secrets.token_hex(10)
@@ -245,6 +257,9 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         assert ok(route['endpoint'], {'message': 'Restored route key'}, headers={'X-Relay-Key': route['token']})['event_id']
         actions = json.dumps(ok('/api/audit-log'))
         assert 'backup.restore' in actions and token not in actions and master not in actions
+        account_actions = {item['action'] for item in ok('/api/audit-log?target_id=' + user)['items']}
+        assert {'totp.prepare', 'totp.enable', 'auth.login'} <= account_actions
+        assert enrollment['secret'] not in actions and pending_setup['secret'] not in actions
         print('PASS: atomic credential/TOTP migration, missing/wrong key preservation, encrypted full backup, rejected corruption and exact file/route/TOTP recovery')
     finally:
         subprocess.run(compose + ['down', '--volumes', '--remove-orphans'], env=env, capture_output=True, timeout=100)
