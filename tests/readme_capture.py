@@ -64,6 +64,8 @@ def browser_capture():
         page.get_by_role('button', name='Sign in', exact=True).click()
         expect(page.get_by_role('heading', name='Dashboard', exact=True)).to_be_visible()
         print('README capture: dashboard', flush=True)
+        expect(page.get_by_role('button', name='Production · Mattermost', exact=True).first).to_be_visible()
+        expect(page.get_by_role('button', name='Production deployments', exact=True).first).to_be_visible()
         page.get_by_role('button', name='Dark', exact=True).click()
         page.evaluate('document.fonts.ready')
         page.screenshot(path=str(output / 'readme-dashboard-dark.png'), full_page=True, animations='disabled')

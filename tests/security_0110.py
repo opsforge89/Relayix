@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from backup import BackupError, Deployment
 from rotate_secrets import native
@@ -184,8 +185,20 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
                 pass
             assert sql('SELECT key_check FROM secrets_state') == manifest_before
             # Simulate commit followed by loss of the host process before its configuration update.
-            native(operator, old_master, new_master, 'apply')
-            native(operator, old_master, new_master, 'apply')
+            original_run = subprocess.run
+            def diagnostic_run(*args, **kwargs):
+                kwargs['stderr'] = subprocess.PIPE
+                result = original_run(*args, **kwargs)
+                if result.returncode:
+                    message = result.stderr.decode(errors='replace')
+                    private = [token, enrollment['secret'], pending_setup['secret'], old_master, new_master, *config.values(), *kwargs.get('env', {}).values()]
+                    for value in sorted((v for v in private if isinstance(v, str) and len(v) >= 8), key=len, reverse=True):
+                        message = message.replace(value, '[redacted]')
+                    print('Rotation diagnostic: ' + message[:2048], file=sys.stderr)
+                return result
+            with patch('rotate_secrets.subprocess.run', side_effect=diagnostic_run):
+                native(operator, old_master, new_master, 'apply')
+                native(operator, old_master, new_master, 'apply')
             assert sql("SELECT COUNT(*) FROM audit_log WHERE action='secrets.rotate'") == '1'
         finally:
             operator.cleanup()
