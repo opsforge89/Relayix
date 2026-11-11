@@ -47,6 +47,9 @@ try:
     assert any(item['action'] == 'user.create' and item['auth_method'] == 'token' for item in actions)
     ok('/api/users/' + user, {'username': name, 'display_name': 'Admin edit', 'role': 'admin', 'enabled': False}, 'PUT')
     assert any(item['action'] == 'user.update' for item in ok('/api/audit-log?target_id=' + user)['items'])
+    unknown = 'unknown.audit.' + uuid.uuid4().hex
+    assert request('/api/auth/login', {'username': unknown, 'password': credentials['operator_password']}, headers={'Authorization': ''})[0] == 401
+    assert unknown not in json.dumps(ok('/api/audit-log'))
     serialized = json.dumps(actions)
     assert credentials['operator_password'] not in serialized and credentials['operator_new_password'] not in serialized and session['Cookie'] not in serialized
 finally:

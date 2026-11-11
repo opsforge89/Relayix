@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
 
     def run(args, expected=0, **kwargs):
         result = subprocess.run(args, env=env, capture_output=True, timeout=120, **kwargs)
-        if result.returncode != expected and 'backup.py' in ' '.join(str(arg) for arg in args):
+        if result.returncode != expected and any(name in ' '.join(str(arg) for arg in args) for name in ['backup.py', 'rotate_secrets.py']):
             # The operational command intentionally emits only redacted failure messages.
             message = result.stderr.decode(errors='replace')
             if all(secret not in message for secret in [config['ADMIN_TOKEN'], config['POSTGRES_PASSWORD'], config.get('SECRETS_KEY', '')] if secret):
