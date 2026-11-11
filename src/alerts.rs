@@ -248,6 +248,7 @@ pub async fn save_personal(
     Json(input): Json<PersonalInput>,
 ) -> ApiResult<Value> {
     let owner = account(&h, &s).await?;
+    let actor = auth::authenticated(&h, &s).await?;
     if !matches!(
         input.trigger_mode.as_str(),
         "final" | "first_error" | "threshold"
@@ -257,20 +258,27 @@ pub async fn save_personal(
     let mut policy=PolicyInput{final_only:input.trigger_mode=="final",name:"Personal delivery alerts".into(),enabled:input.enabled,watch_channel_ids:vec![],watch_route_ids:input.watch_route_ids,destination_ids:input.destination_ids,failure_threshold:if input.trigger_mode=="threshold"{input.failure_threshold}else{1},min_attempts:1,window_minutes:input.window_minutes,cooldown_minutes:input.cooldown_minutes,title:"Relayix: delivery failure".into(),body:"{failures} delivery failure(s). Channel: {channel}. Route: {route}. Message: {title}. Error: {error}".into()};
     if !policy.enabled {
         policy.destination_ids =
-            sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) ORDER BY id")
+            sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) AND relay_channel_access(id,$2,'send') ORDER BY id")
                 .bind(&policy.destination_ids)
+                .bind(owner)
                 .fetch_all(&s.db)
                 .await
                 .map_err(db_error)?;
-        policy.watch_route_ids =
-            sqlx::query_scalar("SELECT id FROM routes WHERE id=ANY($1) ORDER BY id")
-                .bind(&policy.watch_route_ids)
-                .fetch_all(&s.db)
-                .await
-                .map_err(db_error)?;
+        policy.watch_route_ids = sqlx::query_scalar(
+            "SELECT id FROM routes WHERE id=ANY($1) AND relay_route_view(id,$2) ORDER BY id",
+        )
+        .bind(&policy.watch_route_ids)
+        .bind(owner)
+        .fetch_all(&s.db)
+        .await
+        .map_err(db_error)?;
     }
     validate(&s, &policy).await?;
     if policy.enabled {
+        access::recipients(&s.db, &actor, &policy.destination_ids).await?;
+        for route in &policy.watch_route_ids {
+            access::route(&s.db, &actor, *route, false).await?;
+        }
         let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id=ANY($1) AND enabled")
                 .bind(&policy.destination_ids)
@@ -302,6 +310,8 @@ pub async fn test_personal(State(s): State<AppState>, h: HeaderMap) -> ApiResult
                     "Save and enable your delivery alert subscription first",
                 )
             })?;
+    let actor = auth::authenticated(&h, &s).await?;
+    access::recipients(&s.db, &actor, &policy.destination_ids).await?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let channels: Vec<Uuid> =
         sqlx::query_scalar("SELECT id FROM channels WHERE id=ANY($1) AND enabled")
@@ -323,7 +333,7 @@ pub async fn personal_history(
     h: HeaderMap,
 ) -> ApiResult<Vec<AlertDelivery>> {
     let owner = account(&h, &s).await?;
-    Ok(Json(sqlx::query_as("SELECT a.id,p.name AS policy_name,c.name AS channel_name,a.status,a.attempts,a.error,a.title,a.created_at,a.sent_at FROM alert_deliveries a LEFT JOIN alert_policies p ON p.id=a.policy_id JOIN channels c ON c.id=a.channel_id WHERE a.owner_user_id=$1 ORDER BY a.created_at DESC,a.id DESC LIMIT 100").bind(owner).fetch_all(&s.db).await.map_err(db_error)?))
+    Ok(Json(sqlx::query_as("SELECT a.id,p.name AS policy_name,c.name AS channel_name,a.status,a.attempts,a.error,a.title,a.created_at,a.sent_at FROM alert_deliveries a LEFT JOIN alert_policies p ON p.id=a.policy_id JOIN channels c ON c.id=a.channel_id WHERE a.owner_user_id=$1 AND relay_channel_access(a.channel_id,$1,'view') ORDER BY a.created_at DESC,a.id DESC LIMIT 100").bind(owner).fetch_all(&s.db).await.map_err(db_error)?))
 }
 
 pub async fn retry_personal(
@@ -343,7 +353,7 @@ pub async fn retry_personal(
     if !exists {
         return Err(err(StatusCode::NOT_FOUND, "Alert delivery not found"));
     }
-    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=GREATEST(NOW(),not_before) WHERE id=$1 AND owner_user_id=$2 AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
+    let result=sqlx::query("UPDATE alert_deliveries a SET status='queued',attempts=0,error=NULL,error_category=NULL,locked_at=NULL,next_attempt_at=GREATEST(NOW(),not_before) WHERE id=$1 AND owner_user_id=$2 AND relay_channel_access(channel_id,$2,'send') AND status='failed' AND EXISTS(SELECT 1 FROM alert_policies p WHERE p.id=a.policy_id AND p.enabled)").bind(id).bind(owner).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(
             StatusCode::CONFLICT,
@@ -399,14 +409,15 @@ async fn schedule(s: &AppState) -> Result<()> {
         let Some(policy) = policy else {
             continue;
         };
-        let failures:Vec<(Uuid,String,String,String,String,i32)>=sqlx::query_as("SELECT d.id,c.name,r.name,d.error,e.title,d.retry_generation FROM deliveries d JOIN channels c ON c.id=d.channel_id JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE d.status IN ('queued','failed') AND d.error IS NOT NULL AND d.cycle_attempts>=$1 AND (NOT $6 OR d.status='failed') AND ($7::timestamptz IS NULL OR d.last_error_at>=$7) AND d.last_error_at>=NOW()-$2::int*INTERVAL '1 minute' AND (CARDINALITY($3::uuid[])=0 OR d.channel_id=ANY($3)) AND (CARDINALITY($4::uuid[])=0 OR e.route_id=ANY($4)) AND NOT EXISTS(SELECT 1 FROM alert_incidents i WHERE i.policy_id=$5 AND i.delivery_id=d.id AND i.retry_generation=d.retry_generation) ORDER BY d.last_error_at DESC LIMIT 1000")
-            .bind(policy.min_attempts).bind(policy.window_minutes).bind(&policy.watch_channel_ids).bind(&policy.watch_route_ids).bind(pid).bind(policy.final_only).bind(policy.owner_user_id.map(|_|policy.created_at)).fetch_all(&mut *tx).await?;
+        let failures:Vec<(Uuid,String,String,String,String,i32)>=sqlx::query_as("SELECT d.id,c.name,r.name,d.error,e.title,d.retry_generation FROM deliveries d JOIN channels c ON c.id=d.channel_id JOIN events e ON e.id=d.event_id JOIN routes r ON r.id=e.route_id WHERE ($8::uuid IS NULL OR (relay_route_view(e.route_id,$8) AND relay_channel_access(c.id,$8,'view'))) AND d.status IN ('queued','failed') AND d.error IS NOT NULL AND d.cycle_attempts>=$1 AND (NOT $6 OR d.status='failed') AND ($7::timestamptz IS NULL OR d.last_error_at>=$7) AND d.last_error_at>=NOW()-$2::int*INTERVAL '1 minute' AND (CARDINALITY($3::uuid[])=0 OR d.channel_id=ANY($3)) AND (CARDINALITY($4::uuid[])=0 OR e.route_id=ANY($4)) AND NOT EXISTS(SELECT 1 FROM alert_incidents i WHERE i.policy_id=$5 AND i.delivery_id=d.id AND i.retry_generation=d.retry_generation) ORDER BY d.last_error_at DESC LIMIT 1000")
+            .bind(policy.min_attempts).bind(policy.window_minutes).bind(&policy.watch_channel_ids).bind(&policy.watch_route_ids).bind(pid).bind(policy.final_only).bind(policy.owner_user_id.map(|_|policy.created_at)).bind(policy.owner_user_id).fetch_all(&mut *tx).await?;
         if failures.len() < policy.failure_threshold as usize {
             continue;
         }
         let destinations: Vec<(Uuid,)> =
-            sqlx::query_as("SELECT id FROM channels WHERE id=ANY($1) AND enabled=true")
+            sqlx::query_as("SELECT id FROM channels WHERE id=ANY($1) AND enabled=true AND ($2::uuid IS NULL OR relay_channel_access(id,$2,'send'))")
                 .bind(&policy.destination_ids)
+                .bind(policy.owner_user_id)
                 .fetch_all(&mut *tx)
                 .await?;
         if destinations.is_empty() {
@@ -465,7 +476,7 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         lease::Claim::Idle => return Ok(lease::Claim::Idle),
         lease::Claim::Contended => return Ok(lease::Claim::Contended),
     };
-    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND ((status='queued' AND next_attempt_at<=NOW() AND not_before<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
+    let row:Option<(Uuid,Uuid,String,String,i32)>=sqlx::query_as("SELECT id,channel_id,title,message,attempts+1 FROM alert_deliveries WHERE channel_id=$1 AND (owner_user_id IS NULL OR relay_channel_access(channel_id,owner_user_id,'send')) AND ((status='queued' AND next_attempt_at<=NOW() AND not_before<=NOW()) OR (status='processing' AND locked_at<NOW()-INTERVAL '2 minutes')) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").bind(channel).fetch_optional(&mut *tx).await?;
     let Some((id, cid, title, message, number)) = row else {
         return Ok(lease::Claim::Contended);
     };
@@ -476,7 +487,7 @@ async fn send_next(s: &AppState) -> Result<lease::Claim<()>> {
         Disabled,
     }
     let work = async {
-        let allowed:bool=sqlx::query_scalar("SELECT a.owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN alert_policies p ON p.owner_user_id=u.id WHERE u.id=a.owner_user_id AND u.enabled AND p.enabled AND p.id=a.policy_id) FROM alert_deliveries a WHERE a.id=$1").bind(id).fetch_one(&s.db).await?;
+        let allowed:bool=sqlx::query_scalar("SELECT a.owner_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN alert_policies p ON p.owner_user_id=u.id WHERE u.id=a.owner_user_id AND u.enabled AND p.enabled AND p.id=a.policy_id AND relay_channel_access(a.channel_id,u.id,'send')) FROM alert_deliveries a WHERE a.id=$1").bind(id).fetch_one(&s.db).await?;
         if !allowed {
             return Ok(Outcome::Disabled);
         }

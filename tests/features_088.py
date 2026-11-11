@@ -72,7 +72,10 @@ try:
     code,_,headers=request('/api/auth/login',{'username':user,'password':credentials['operator_password']},headers={'Authorization':''})
     assert code==200
     member_headers={'Authorization':'','Cookie':headers['Set-Cookie'].split(';',1)[0]}
-    preview=ok('/api/routes/'+preview_route['id']+'/preview',{'message':'a'*9000},headers=member_headers)
+    for cid in [secret_channel,discord]:
+        ok('/api/channels/'+cid+'/access',{'owner_user_id':None,'grants':[{'user_id':members[-1],'can_view':True,'can_edit':False,'can_send':True}]},method='PUT')
+    member_route=ok('/api/routes',{'name':'Member preview','channel_ids':[secret_channel,discord]},headers=member_headers);routes.append(member_route['id'])
+    preview=ok('/api/routes/'+member_route['id']+'/preview',{'message':'a'*9000},headers=member_headers)
     assert hidden not in json.dumps(preview)
     assert next(c for c in preview['channel_previews'] if c['id']==secret_channel)['presentation']['restricted']
     for kind,config,field,replacement in [
@@ -81,6 +84,7 @@ try:
         ('smtp',{'host':'mock','port':1025,'tls':'none','username':'example','password':hidden,'from':'test@example.org','to':'ops@example.org'},'host','proxy'),
     ]:
         cid=channel(kind,config)
+        ok('/api/channels/'+cid+'/access',{'owner_user_id':None,'grants':[{'user_id':members[-1],'can_view':True,'can_edit':True,'can_send':False}]},method='PUT')
         masked=next(c['config'] for c in ok('/api/channels',headers=member_headers) if c['id']==cid)
         ok('/api/channels/'+cid,{'name':'088 unchanged','kind':kind,'config':masked},'PUT',member_headers)
         masked[field]=replacement

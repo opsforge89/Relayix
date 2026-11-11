@@ -96,6 +96,8 @@ try:
     member_headers={'Authorization':'','Cookie':h['Set-Cookie'].split(';',1)[0]}
     assert request('/api/config/export',headers=member_headers)[0]==403
     assert request('/api/config/import',bundle,headers=member_headers)[0]==403
+    for cid in [channel,discord]:
+        ok('/api/channels/'+cid+'/access',{'owner_user_id':None,'grants':[{'user_id':member,'can_view':True,'can_edit':True,'can_send':False}]},method='PUT')
     member_channels=ok('/api/channels',headers=member_headers)
     protected=next(c for c in member_channels if c['id']==channel)
     assert protected['config']['body_template']=='********' and hidden not in json.dumps(member_channels)

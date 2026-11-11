@@ -162,7 +162,8 @@ pub async fn download(
     h: HeaderMap,
     Path((event, id)): Path<(Uuid, Uuid)>,
 ) -> std::result::Result<axum::response::Response, (StatusCode, Json<Value>)> {
-    auth::authenticated(&h, &s).await?;
+    let actor = auth::authenticated(&h, &s).await?;
+    access::event(&s.db, &actor, event).await?;
     let row: Option<(String, Vec<u8>)> =
         sqlx::query_as("SELECT name,data FROM event_attachments WHERE event_id=$1 AND id=$2")
             .bind(event)
