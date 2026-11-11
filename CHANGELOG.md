@@ -3,6 +3,7 @@
 ## 0.12.0 Beta — 2026-11-11
 
 - Add offline master-key rotation with SECRETS_KEY_OLD, authenticated key identifiers, atomic channel/TOTP re-encryption, stale-writer rejection and recoverable private configuration updates.
+- Reset the dedicated public schema transactionally during full restore so newer objects cannot block migrations after restoring an older snapshot.
 - Use PostgreSQL-supported timeout units for offline key rotation.
 - Upgrade legacy secret envelopes automatically with the existing key; reject wrong keys without rewriting data.
 - Audit account changes, password changes and session sign-in/out; bound failed known-account sign-in records to the throttling window without logging submitted credentials or unknown usernames.

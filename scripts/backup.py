@@ -148,8 +148,13 @@ def verified_dump(deployment, path, output):
 
 
 # Revoke snapshot sessions and recover interrupted leases in the same restore transaction.
+RESET_SCHEMA_SQL = b"""
+SET LOCAL search_path = pg_catalog;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+"""
 RESTORE_SQL = b"""
-SET LOCAL search_path = public, pg_catalog;
+SET LOCAL search_path = pg_catalog, public;
 DELETE FROM sessions;
 DELETE FROM login_attempts;
 UPDATE delivery_attempts SET status='interrupted',finished_at=NOW(),error='Interrupted by backup restore' WHERE status='processing';
@@ -180,11 +185,19 @@ def restore_backup(deployment, path, replace):
                                         env=deployment.pg_env).strip())
         if target // 10000 < metadata['database_version'] // 10000:
             raise BackupError('Target PostgreSQL must be at least the backup source major version')
-        count = deployment.command(deployment.pg('psql', '-XAtc', "SELECT COUNT(*) FROM pg_tables WHERE schemaname='public'"),
+        count = deployment.command(deployment.pg('psql', '-XAtc', "SELECT COUNT(*) FROM pg_depend d JOIN pg_namespace n ON d.refclassid='pg_namespace'::regclass AND d.refobjid=n.oid WHERE n.nspname='public'"),
                                    env=deployment.pg_env).strip()
         if count != b'0' and not replace:
             raise BackupError('Target database is not empty; --replace is required to replace its Relayix data')
-        deployment.pg_run('pg_restore', '--file=-', '--clean', '--if-exists', '--no-owner', '--no-acl', stdin=dump, stdout=sql)
+        owner = deployment.command(deployment.pg('psql', '-XAtc', "SELECT has_database_privilege(current_user,current_database(),'CREATE') AND COALESCE((SELECT pg_has_role(current_user,nspowner,'USAGE') FROM pg_namespace WHERE nspname='public'),true)"), env=deployment.pg_env).strip()
+        if owner != b't':
+            raise BackupError('Full restore requires ownership of the dedicated public schema and CREATE privilege on the database')
+        # Reset and restore share the single psql transaction. This removes newer objects
+        # absent from an older archive before subsequent migrations recreate them.
+        sql.write(RESET_SCHEMA_SQL)
+        sql.flush()
+        deployment.pg_run('pg_restore', '--file=-', '--no-owner', '--no-acl', stdin=dump, stdout=sql)
+        sql.seek(0, os.SEEK_END)
         sql.write(RESTORE_SQL)
         sql.seek(0)
         config_path, recovery_path, config = stage_settings(deployment, metadata['settings'])

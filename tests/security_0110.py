@@ -239,6 +239,7 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         assert archive.stat().st_mode & 0o077 == 0
         data = archive.read_bytes()
         assert master.encode() not in data and token.encode() not in data and enrollment['secret'].encode() not in data and body not in data
+        sql("CREATE FUNCTION public.restore_future_guard() RETURNS integer LANGUAGE SQL AS 'SELECT 1'")
         wrong = folder / 'wrong'
         wrong.write_text(secrets.token_urlsafe(32))
         wrong.chmod(0o600)
@@ -248,6 +249,7 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         truncated.write_bytes(data[:-1])
         run(backup + ['restore', str(truncated), '--replace', '--password-file', str(password)], expected=1)
         healthy()
+        assert sql("SELECT to_regprocedure('public.restore_future_guard()') IS NOT NULL") == 't'
         assert sql("SELECT COUNT(*) FROM event_attachments WHERE event_id='" + event['event_id'] + "'") == '1'
         # Simulate losing the live master key and data; the password-encrypted backup recovers both.
         run(compose + ['stop', 'app'])
@@ -259,6 +261,7 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         assert config['SECRETS_KEY'] == master
         healthy()
         assert sql('SELECT COUNT(*) FROM sessions') == '0'
+        assert sql("SELECT to_regprocedure('public.restore_future_guard()') IS NULL") == 't'
         assert sql("SELECT config::text FROM channels WHERE id='" + channel + "'") == raw
         assert sql("SELECT status||':'||attempts FROM deliveries WHERE event_id='" + event['event_id'] + "'") == 'queued:0'
         detail = ok('/api/events/' + event['event_id'])
