@@ -281,11 +281,16 @@ pub async fn login(
         (false, None)
     };
     if !valid {
-        let mut tx=s.db.begin().await.map_err(db_error)?;
+        let mut tx = s.db.begin().await.map_err(db_error)?;
         let attempts:Vec<(String,i32)>=sqlx::query_as("INSERT INTO login_attempts(username,failures) VALUES($1,1),($2,1) ON CONFLICT(username) DO UPDATE SET failures=login_attempts.failures+1 RETURNING username,failures")
             .bind(&attempt_key).bind(&account_key).fetch_all(&mut *tx).await.map_err(db_error)?;
-        if attempts.iter().any(|(key,count)|key==&account_key && *count==1) {
-            if let Some((id,_,_))=&row {audit::login_failure(&mut tx,*id).await.map_err(db_error)?;}
+        if attempts
+            .iter()
+            .any(|(key, count)| key == &account_key && *count == 1)
+        {
+            if let Some((id, _, _)) = &row {
+                audit::login_failure(&mut tx, *id).await.map_err(db_error)?;
+            }
         }
         tx.commit().await.map_err(db_error)?;
         return Err(err(
@@ -305,12 +310,15 @@ pub async fn login(
         .execute(&s.db)
         .await
         .map_err(db_error)?;
-    let token=key();let mut tx=s.db.begin().await.map_err(db_error)?;
+    let token = key();
+    let mut tx = s.db.begin().await.map_err(db_error)?;
     sqlx::query("INSERT INTO sessions(token_hash,user_id,expires_at,mfa_generation) VALUES($1,$2,NOW()+INTERVAL '7 days',$3)")
         .bind(hash(&token)).bind(id).bind(mfa_generation).execute(&mut *tx).await.map_err(db_error)?;
     let user=sqlx::query_as::<_,User>("SELECT id,username,display_name,role,enabled,created_at,preferences FROM users WHERE id=$1").bind(id).fetch_one(&mut *tx).await.map_err(db_error)?;
-    let principal:Principal=user.into();
-    audit::record(&mut tx,&principal,"auth.login","user",id,None).await.map_err(db_error)?;
+    let principal: Principal = user.into();
+    audit::record(&mut tx, &principal, "auth.login", "user", id, None)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -334,8 +342,8 @@ pub async fn logout(
     State(s): State<AppState>,
     h: HeaderMap,
 ) -> std::result::Result<(HeaderMap, Json<Value>), (StatusCode, Json<Value>)> {
-    let actor=authenticated(&h,&s).await?;
-    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let actor = authenticated(&h, &s).await?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
     if let Some(token) = session_token(&h) {
         sqlx::query("DELETE FROM sessions WHERE token_hash=$1")
             .bind(hash(token))
@@ -343,7 +351,11 @@ pub async fn logout(
             .await
             .map_err(db_error)?;
     }
-    if let Some(id)=actor.id {audit::record(&mut tx,&actor,"auth.logout","user",id,None).await.map_err(db_error)?;}
+    if let Some(id) = actor.id {
+        audit::record(&mut tx, &actor, "auth.logout", "user", id, None)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -384,7 +396,7 @@ pub async fn create_user(
     h: HeaderMap,
     Json(input): Json<UserInput>,
 ) -> ApiResult<Value> {
-    let actor=require_admin(&h,&s).await?;
+    let actor = require_admin(&h, &s).await?;
     valid_user(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let password = input.password.as_deref().unwrap_or("");
     password_valid(password, &input.username).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
@@ -392,11 +404,13 @@ pub async fn create_user(
         .await
         .map_err(|_| err(StatusCode::INTERNAL_SERVER_ERROR, "Password hashing failed"))?;
     let id = Uuid::new_v4();
-    let mut tx=s.db.begin().await.map_err(db_error)?;
+    let mut tx = s.db.begin().await.map_err(db_error)?;
     sqlx::query("INSERT INTO users(id,username,display_name,password_hash,role,enabled) VALUES($1,$2,$3,$4,$5,$6)")
         .bind(id).bind(input.username).bind(input.display_name.trim()).bind(encoded).bind(input.role).bind(input.enabled.unwrap_or(true))
         .execute(&mut *tx).await.map_err(|e|if e.as_database_error().and_then(|e|e.code()).as_deref()==Some("23505") {err(StatusCode::CONFLICT,"Username already exists")}else{db_error(e)})?;
-    audit::record(&mut tx,&actor,"user.create","user",id,None).await.map_err(db_error)?;
+    audit::record(&mut tx, &actor, "user.create", "user", id, None)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"id":id})))
 }
@@ -458,8 +472,14 @@ pub async fn update_user(
             .await
             .map_err(db_error)?;
     }
-    audit::record(&mut tx,&actor,"user.update","user",id,None).await.map_err(db_error)?;
-    if encoded.is_some() {audit::record(&mut tx,&actor,"user.password_change","user",id,None).await.map_err(db_error)?;}
+    audit::record(&mut tx, &actor, "user.update", "user", id, None)
+        .await
+        .map_err(db_error)?;
+    if encoded.is_some() {
+        audit::record(&mut tx, &actor, "user.password_change", "user", id, None)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -500,7 +520,9 @@ pub async fn delete_user(
     if deleted.rows_affected() == 0 {
         return Err(err(StatusCode::NOT_FOUND, "User not found"));
     }
-    audit::record(&mut tx,&actor,"user.delete","user",id,None).await.map_err(db_error)?;
+    audit::record(&mut tx, &actor, "user.delete", "user", id, None)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }
@@ -568,8 +590,14 @@ pub async fn profile(
             .await
             .map_err(db_error)?;
     }
-    audit::record(&mut tx,&actor,"user.profile","user",id,None).await.map_err(db_error)?;
-    if encoded.is_some() {audit::record(&mut tx,&actor,"user.password_change","user",id,None).await.map_err(db_error)?;}
+    audit::record(&mut tx, &actor, "user.profile", "user", id, None)
+        .await
+        .map_err(db_error)?;
+    if encoded.is_some() {
+        audit::record(&mut tx, &actor, "user.password_change", "user", id, None)
+            .await
+            .map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(Json(json!({"ok":true})))
 }

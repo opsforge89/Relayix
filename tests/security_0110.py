@@ -12,6 +12,9 @@ import subprocess
 import sys
 import tempfile
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from backup import BackupError, Deployment
+from rotate_secrets import native
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener, ProxyHandler
 
@@ -143,6 +146,59 @@ with tempfile.TemporaryDirectory(prefix='relayix-security-') as folder:
         assert denied.returncode != 0
         denied = subprocess.run(compose + ['exec', '-T', 'db', 'psql', '-U', 'relayix', '-d', 'relayix', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE channels SET config=jsonb_set(config,'{bot_token}','\"plaintext\"') WHERE id='" + channel + "'"], env=env, capture_output=True)
         assert denied.returncode != 0
+        # Fail after a channel rewrite but before the TOTP rewrite; the entire transaction must roll back.
+        old_master = master
+        new_master = base64.b64encode(secrets.token_bytes(32)).decode()
+        saved_seed = sql("SELECT secret FROM user_totp WHERE user_id='" + user + "'")
+        packet = saved_seed.split(':')
+        damaged = bytearray(base64.b64decode(packet[-1]))
+        damaged[-1] ^= 1
+        packet[-1] = base64.b64encode(damaged).decode()
+        sql("UPDATE user_totp SET secret='" + ':'.join(packet) + "' WHERE user_id='" + user + "'")
+        manifest_before = sql('SELECT key_check FROM secrets_state')
+        saved_env = os.environ.copy()
+        os.environ.update(RELAYIX_CONFIG_FILE=str(config_path), RELAYIX_IMAGE_OVERRIDE=IMAGE)
+        operator = Deployment()
+        try:
+            try:
+                native(operator, old_master, new_master, 'apply')
+                raise AssertionError('Corrupted TOTP allowed a partial rotation')
+            except BackupError:
+                pass
+            assert sql('SELECT key_check FROM secrets_state') == manifest_before
+            assert sql("SELECT md5(config::text) FROM channels WHERE id='" + channel + "'") == fingerprint
+            sql("UPDATE user_totp SET secret='" + saved_seed + "' WHERE user_id='" + user + "'")
+            wrong = base64.b64encode(secrets.token_bytes(32)).decode()
+            try:
+                native(operator, wrong, new_master, 'apply')
+                raise AssertionError('Wrong old key was accepted')
+            except BackupError:
+                pass
+            assert sql('SELECT key_check FROM secrets_state') == manifest_before
+            # Simulate commit followed by loss of the host process before its configuration update.
+            native(operator, old_master, new_master, 'apply')
+            native(operator, old_master, new_master, 'apply')
+            assert sql("SELECT COUNT(*) FROM audit_log WHERE action='secrets.rotate'") == '1'
+        finally:
+            operator.cleanup()
+            os.environ.clear()
+            os.environ.update(saved_env)
+        new_key_file = folder / 'new-master-key'
+        new_key_file.write_text(new_master)
+        new_key_file.chmod(0o600)
+        run([sys.executable, str(ROOT / 'scripts/rotate_secrets.py'), '--new-key-file', str(new_key_file)])
+        config = json.loads(config_path.read_text())
+        master = new_master
+        assert config['SECRETS_KEY'] == master and 'SECRETS_KEY_OLD' not in config
+        healthy()
+        fail_start(old_master)
+        stale_write = subprocess.run(compose + ['exec', '-T', 'db', 'psql', '-U', 'relayix', '-d', 'relayix', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE channels SET config='" + raw + "'::jsonb WHERE id='" + channel + "'"], env=env, capture_output=True)
+        assert stale_write.returncode != 0
+        raw = sql("SELECT config::text FROM channels WHERE id='" + channel + "'")
+        fingerprint = sql("SELECT md5(config::text) FROM channels WHERE id='" + channel + "'")
+        assert saved_seed != sql("SELECT secret FROM user_totp WHERE user_id='" + user + "'")
+        assert token not in raw and ok('/api/channels')[0]['config']['bot_token'] == '********'
+        print('PASS: atomic master-key rotation rollback, wrong-old-key rejection, idempotent recovery and stale-key writer rejection')
         body = b'PK\x03\x04\x00\xff\x80' + secrets.token_bytes(32)
         boundary = 'relayix' + secrets.token_hex(10)
         multipart = b'--' + boundary.encode() + b'\r\nContent-Disposition: form-data; name="files"; filename="report.xlsx"\r\nContent-Type: application/octet-stream\r\n\r\n' + body + b'\r\n--' + boundary.encode() + b'--\r\n'
