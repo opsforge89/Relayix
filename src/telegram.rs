@@ -176,6 +176,7 @@ async fn transport_inner(
     let effective = application_config(cfg);
     let cfg = &effective;
     let mut child = Command::new("python3")
+        .env_remove("SECRETS_KEY_OLD")
         .env_remove("SECRETS_KEY")
         .env_remove("ADMIN_TOKEN")
         .env_remove("ADMIN_PASSWORD")

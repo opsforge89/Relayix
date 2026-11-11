@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0 Beta — 2026-11-11
+
+- Add offline master-key rotation with SECRETS_KEY_OLD, authenticated key identifiers, atomic channel/TOTP re-encryption, stale-writer rejection and recoverable private configuration updates.
+- Upgrade legacy secret envelopes automatically with the existing key; reject wrong keys without rewriting data.
+- Audit account changes, password changes and session sign-in/out; bound failed known-account sign-in records to the throttling window without logging submitted credentials or unknown usernames.
+- Document independent backup password storage, temporary-disk sizing/TMPDIR configuration and the default 1 GiB attachment budget with retention behavior.
+- Capture current README interface screenshots from the verified candidate in Chromium.
+
 ## 0.11.0 Beta — 2026-11-11
 
 - Expire undelivered notifications using route TTL and X-Relay-TTL, including paused, scheduled, grouped and fallback work; retain history and prevent retry revival.

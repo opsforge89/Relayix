@@ -20,6 +20,10 @@ pub async fn system(
     sqlx::query("INSERT INTO audit_log(actor,auth_method,action,target_type,affected) VALUES('system','local',$1,'system',$2)").bind(action).bind(affected).execute(&mut **tx).await?;
     Ok(())
 }
+/// A stored account identity, never untrusted submitted usernames, passwords or codes.
+pub async fn login_failure(tx:&mut sqlx::Transaction<'_,sqlx::Postgres>,id:Uuid)->sqlx::Result<()> {
+    sqlx::query("INSERT INTO audit_log(actor_id,actor,auth_method,action,target_type,target_id,affected) SELECT id,username,'password-attempt','auth.login_failed','user',id,1 FROM users WHERE id=$1").bind(id).execute(&mut **tx).await?;Ok(())
+}
 #[derive(Deserialize)]
 pub struct Filter {
     page: Option<i64>,

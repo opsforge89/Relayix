@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("backup-stream") {
         return backup::run(args.get(2).map(String::as_str).unwrap_or("")).await;
     }
+    if args.get(1).map(String::as_str)==Some("secrets-rotate") {return secrets::rotate(args.get(2).map(String::as_str).unwrap_or("")).await;}
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
