@@ -55,3 +55,5 @@ docker build -f tests/browser.Dockerfile -t "$RELAYIX_TEST_BROWSER_IMAGE" tests
 python3 tests/runtime_083.py
 
 python3 tests/release_084.py
+
+python3 tests/readme_capture.py
