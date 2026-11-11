@@ -74,15 +74,26 @@ Keep your `.env` and database volume. Migrations run automatically. For upgrades
 
 ## Preview
 
-Current interface with fictional demonstration data.
+Current interface, captured from the verified 0.12.0 Beta runtime with fictional demonstration data.
 
-![Relayix 0.8.2 dashboard with compact channels, routes and delivery history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
+![Relayix dashboard with delivery metrics, channels, routes and delivery history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
 
-![Relayix 0.8.2 channels and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
+![Relayix channels, manual pause controls and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
 
-![Relayix 0.8.2 template editor with categorized fields and examples — light theme](docs/screenshots/relayix-template-editor-light.png)
+![Relayix template editor with categorized fields and a rendered notification preview — light theme](docs/screenshots/relayix-template-editor-light.png)
+
+<details>
+<summary>Delivery timing and administrator audit</summary>
+
+![Route message TTL and quiet-hours controls — light theme](docs/screenshots/relayix-route-controls-light.png)
+
+![Administrator audit log with account, route and channel actions — light theme](docs/screenshots/relayix-audit-light.png)
+
+</details>
 
 ## Documentation
+
+[Message TTL, audit and encrypted recovery](docs/REFERENCE.md#message-lifetime-audit-and-encrypted-recovery) · [Master-key rotation](docs/REFERENCE.md#rotate-the-credential-master-key) · [Full encrypted backup](docs/REFERENCE.md#full-password-encrypted-backup)
 
 [Integration capabilities and limits](docs/REFERENCE.md#integration-capabilities-and-message-limits) · [Delivery controls](docs/REFERENCE.md#delivery-controls) · [Optional TOTP](docs/REFERENCE.md#optional-two-factor-authentication) · [Message previews](docs/REFERENCE.md#message-previews) · [Retries and channel recovery](docs/REFERENCE.md#retries-and-channel-recovery)
 
@@ -91,5 +102,3 @@ Current interface with fictional demonstration data.
 ## License
 
 [Apache-2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and service icons.
-
-Message TTL, administrator audit history, optional AES-GCM credential storage and full password-encrypted backup/restore are described in [the reference](docs/REFERENCE.md#message-lifetime-audit-and-encrypted-recovery).

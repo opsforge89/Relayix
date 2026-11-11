@@ -44,7 +44,7 @@ The screenshots use demonstration data and show the current interface.
 
 ### Channels and integrations · light theme
 
-![Relayix compact channel list and available integrations](screenshots/relayix-channels-light.png)
+![Relayix channels, pause controls and available integrations](screenshots/relayix-channels-light.png)
 
 ## Runtime and dependencies
 
