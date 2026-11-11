@@ -286,10 +286,10 @@ async fn enqueue(
         }
     }
     let destinations = sqlx::query_as::<_, Destination>(
-        "SELECT c.id,c.name,c.kind,c.enabled FROM channels c JOIN route_channels rc ON rc.channel_id=c.id WHERE rc.route_id=$1 ORDER BY c.created_at,c.id")
+        "SELECT c.id,c.name,c.kind,c.enabled FROM channels c JOIN route_channels rc ON rc.channel_id=c.id WHERE rc.route_id=$1 AND relay_route_send($1,c.id) ORDER BY c.created_at,c.id")
         .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
     let routing = report(&endpoint, &event, destinations);
-    let fallback:Vec<(Uuid,String,bool)>=sqlx::query_as("SELECT c.id,c.name,c.enabled FROM channels c JOIN route_fallback_channels f ON f.channel_id=c.id WHERE f.route_id=$1 ORDER BY c.id")
+    let fallback:Vec<(Uuid,String,bool)>=sqlx::query_as("SELECT c.id,c.name,c.enabled FROM channels c JOIN route_fallback_channels f ON f.channel_id=c.id WHERE f.route_id=$1 AND relay_route_send($1,c.id) ORDER BY c.id")
         .bind(endpoint.id).fetch_all(&mut *tx).await.map_err(db_error)?;
     let mut routing = serde_json::to_value(routing).unwrap();
     routing["fallback_recipients"] = json!(fallback
@@ -664,7 +664,8 @@ pub async fn test_route(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&headers, &s).await?;
+    let actor=auth::authenticated(&headers,&s).await?;
+    crate::access::route_recipients(&s.db,&actor,id).await?;
     let endpoint = sqlx::query_as::<_, Endpoint>(
         "SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?
@@ -693,6 +694,7 @@ pub async fn preview_route(
     Json(payload): Json<Value>,
 ) -> ApiResult<Value> {
     let principal = auth::authenticated(&headers, &s).await?;
+    crate::access::route_recipients(&s.db,&principal,id).await?;
     let endpoint=sqlx::query_as::<_,Endpoint>("SELECT id,name,enabled,min_priority,required_tag,token_hash,message_template_id AS template_id,payload_rules,rate_limit_per_minute,delivery_settings FROM routes WHERE id=$1")
         .bind(id).fetch_optional(&s.db).await.map_err(db_error)?.ok_or_else(||err(StatusCode::NOT_FOUND,"Route not found"))?;
     let schedule = crate::delivery_policy::Schedule::parse(&headers)

@@ -12,7 +12,7 @@ project='relayix-test-upgrade-'+secrets.token_hex(5)
 network=project+'-network'
 db=project+'-db'
 app=project+'-app'
-image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.12.0')
+image=os.environ.get('RELAYIX_TEST_IMAGE','relayix:0.13.0')
 
 def run(args, **kwargs):
     result=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,**kwargs)
@@ -62,7 +62,7 @@ from pathlib import Path
 token=next(line.split('=',1)[1] for line in Path('/proc/self/environ').read_bytes().decode().split(chr(0)) if line.startswith('ADMIN_TOKEN='))
 def api(path):
  return json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080'+path,headers={'Authorization':'Bearer '+token})))
-assert api('/healthz')['version']=='0.12.0'
+assert api('/healthz')['version']=='0.13.0'
 event=api('/api/events?route_id=RID')['items'][0]
 assert event['id']=='EID' and event['title']=='Preserved legacy event' and event['routing'] is None
 attempts=api('/api/deliveries/DID/attempts')

@@ -69,8 +69,7 @@ with sync_playwright() as p:
         member_page.get_by_label('Username',exact=True).fill(member_name);member_page.get_by_label('Password',exact=True).fill(credentials['operator_password']);member_page.get_by_role('button',name='Sign in',exact=True).click()
         expect(member_page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
         member_page.locator('nav').get_by_role('button',name='Channels',exact=True).click()
-        restricted=member_page.locator('.channel-entry').filter(has=member_page.locator('button[title="Administrator required for channels with a body template"]')).first
-        expect(restricted.get_by_role('button',name='Edit',exact=True)).to_be_disabled()
+        expect(member_page.locator('.channel-entry')).to_have_count(0)
         member_page.get_by_role('button',name='Add Channel',exact=True).click()
         member_editor=member_page.get_by_role('dialog',name='Add channel',exact=True)
         member_editor.get_by_label('Integration',exact=True).select_option('webhook')

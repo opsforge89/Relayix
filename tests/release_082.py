@@ -31,6 +31,8 @@ def verify(api, anonymous):
         assert personal(one) is None and personal(two) is None
         for name,path in [('Failed receiver','fail'),('Successful receiver','release082'),('Independent alert recipient','release082-alert')]:
             channels.append(api.ok('/api/channels',{'name':'082 '+name,'kind':'webhook','enabled':True,'config':{'url':'http://mock:8000/'+path}},'POST')['id'])
+        for cid in channels:
+            api.ok('/api/channels/'+cid+'/access',{'owner_user_id':None,'grants':[{'user_id':uid,'can_view':True,'can_edit':False,'can_send':True} for uid in users]},'PUT')
         spec={'name':'082 computed tests','title':'{{suite}}','body':'{{status}} · Passed: {{passed}} · Failed: {{failed}}','computed_status':True,'passed_field':'passed','failed_field':'failed','link_url':''}
         template=api.ok('/api/templates',spec,'POST');templates.append(template['id'])
         for passed,failed,status in [(40,2,'❌'),(40,0,'✅'),(0,0,'⚠️'),(0,2,'❌')]:

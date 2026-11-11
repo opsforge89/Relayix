@@ -61,7 +61,7 @@ The minimum payload is `{"message":"..."}`. Add an optional `title` and/or `tags
 
 ## Update
 
-Release image: `ghcr.io/opsforge89/relayix:0.12.0`.
+Release image: `ghcr.io/opsforge89/relayix:0.13.0`.
 
 Change the app image tag in `compose.yaml`, then run:
 
@@ -102,3 +102,5 @@ Current interface, captured from the verified 0.12.0 Beta runtime with fictional
 ## License
 
 [Apache-2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependencies and service icons.
+
+Personal channels support independent View, Edit and Send permissions. Administrators retain access to all channels; see [access rights and upgrade behavior](docs/REFERENCE.md#personal-channels-and-access-rights).

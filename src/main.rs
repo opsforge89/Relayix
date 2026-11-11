@@ -17,6 +17,7 @@ mod totp;
 use channel_api::*;
 use delivery_api::*;
 use route_api::*;
+mod access;
 mod alerts;
 mod auth;
 mod bulk_retry;
@@ -119,21 +120,21 @@ async fn stats(
     h: HeaderMap,
     Query(query): Query<StatsQuery>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h,&s).await?;
     let period = query.period.as_deref().unwrap_or("30d");
     let duration = monitoring_period(period)
         .ok_or_else(|| err(StatusCode::BAD_REQUEST, "Invalid monitoring period"))?;
     let to = Utc::now();
     let from = to - duration;
-    let (total,sent,failed,pending,retrying):(i64,i64,i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER (WHERE status='sent'),COUNT(*) FILTER (WHERE status='failed'),COUNT(*) FILTER (WHERE status IN ('queued','processing')),COUNT(*) FILTER (WHERE status='queued' AND error IS NOT NULL) FROM deliveries WHERE created_at>=$1 AND created_at<=$2").bind(from).bind(to).fetch_one(&s.db).await.map_err(db_error)?;
-    let (total30,sent30,failed30):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER (WHERE status='sent'),COUNT(*) FILTER (WHERE status='failed') FROM deliveries WHERE created_at>=NOW()-INTERVAL '30 days'").fetch_one(&s.db).await.map_err(db_error)?;
+    let (total,sent,failed,pending,retrying):(i64,i64,i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER (WHERE status='sent'),COUNT(*) FILTER (WHERE status='failed'),COUNT(*) FILTER (WHERE status IN ('queued','processing')),COUNT(*) FILTER (WHERE status='queued' AND error IS NOT NULL) FROM deliveries WHERE ($3 OR EXISTS(SELECT 1 FROM events e WHERE e.id=deliveries.event_id AND relay_route_view(e.route_id,$4))) AND created_at>=$1 AND created_at<=$2").bind(from).bind(to).bind(actor.role=="admin").bind(actor.id).fetch_one(&s.db).await.map_err(db_error)?;
+    let (total30,sent30,failed30):(i64,i64,i64)=sqlx::query_as("SELECT COUNT(*),COUNT(*) FILTER (WHERE status='sent'),COUNT(*) FILTER (WHERE status='failed') FROM deliveries WHERE ($1 OR EXISTS(SELECT 1 FROM events e WHERE e.id=deliveries.event_id AND relay_route_view(e.route_id,$2))) AND created_at>=NOW()-INTERVAL '30 days'").bind(actor.role=="admin").bind(actor.id).fetch_one(&s.db).await.map_err(db_error)?;
     Ok(Json(
         json!({"period":period,"from":from,"to":to,"total":total,"sent":sent,"failed":failed,"pending":pending,"retrying":retrying,"last_30_days":total30,"sent_30_days":sent30,"failed_30_days":failed30}),
     ))
 }
 async fn tags(State(s): State<AppState>, h: HeaderMap) -> ApiResult<Vec<String>> {
-    auth::authenticated(&h, &s).await?;
-    let tags:Vec<(String,)>=sqlx::query_as("SELECT tag FROM (SELECT required_tag AS tag FROM routes WHERE required_tag IS NOT NULL AND required_tag<>'' UNION SELECT tag FROM event_tags) all_tags ORDER BY tag LIMIT 500").fetch_all(&s.db).await.map_err(db_error)?;
+    let actor=auth::authenticated(&h,&s).await?;
+    let tags:Vec<(String,)>=sqlx::query_as("SELECT tag FROM (SELECT required_tag AS tag FROM routes WHERE ($1 OR relay_route_view(id,$2)) AND required_tag IS NOT NULL AND required_tag<>'' UNION SELECT jsonb_array_elements_text(e.tags) AS tag FROM events e WHERE ($1 OR relay_route_view(e.route_id,$2))) all_tags ORDER BY tag LIMIT 500").bind(actor.role=="admin").bind(actor.id).fetch_all(&s.db).await.map_err(db_error)?;
     Ok(Json(tags.into_iter().map(|(tag,)| tag).collect()))
 }
 async fn health(State(s): State<AppState>) -> ApiResult<Value> {
@@ -312,6 +313,7 @@ async fn main() -> Result<()> {
             "/channels/{id}",
             axum::routing::put(update_channel).delete(delete_channel),
         )
+        .route("/channels/{id}/access", get(access::get).put(access::put))
         .route("/channels/{id}/test", post(test_channel))
         .route("/channels/{id}/pause", post(pause_channel))
         .route("/channels/{id}/resume", post(resume_channel))

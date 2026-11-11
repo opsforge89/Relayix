@@ -519,3 +519,35 @@ The default attachment budget is **1,073,741,824 bytes (1 GiB)**, charging at le
 The administrator journal now includes `user.create`, `user.update`, `user.delete`, `user.profile`, `user.password_change`, successful `auth.login`/`auth.logout`, and the existing TOTP prepare/enable/disable/recovery actions. User changes and session creation/deletion commit with their audit records. Role/enable/password edits are recorded as user controls without copying submitted values. Successful password/TOTP/recovery-code sign-in records the authenticated stored account, never the supplied code or session cookie.
 
 Failed sign-ins for a known account produce `auth.login_failed` with method `password-attempt`, at most once per account failure/throttling window (15 minutes, reset after successful login). This identifies the attempted account, not a proven actor; counters retain repeated failures without creating an unauthenticated audit flood. Unknown submitted usernames, passwords, codes, IP addresses and session/admin tokens are not copied into this journal. API-token authentication remains request authorization rather than a password session sign-in; its control actions carry authentication method `token`. The journal does not claim to log every authenticated read or rejected request.
+
+
+## Personal channels and access rights
+
+Administrators (including `ADMIN_TOKEN`) can see and manage **every channel**, including personal channels. Channel secrets remain masked in API/UI responses. A personal channel is private from other members, not from administrators.
+
+New channels belong to the signed-in creator. Channels created with `ADMIN_TOKEN`, credential-free configuration imports, and channels that predate 0.13 are administrator-managed. The upgrade does not guess historical owners, grant members access, change secrets, rotate route keys, or interrupt existing administrator-managed routes. Review these channels after upgrading and assign owners/share access as needed.
+
+Open **Channels → Access** as the owner or an administrator. Add a user and choose independent permissions:
+
+| Permission | Allowed actions | Does not grant |
+| --- | --- | --- |
+| View | Read masked configuration, state and authorized delivery/event history | Editing, pausing, sending or managing collaborators |
+| Edit | Change configuration, run diagnostics, pause/resume | Send, history access, deletion or sharing |
+| Send | Select the channel in the user's own routes and personal alerts; send channel tests | Configuration/history access, editing or sharing |
+| Owner | All three permissions, sharing and deletion | Transfer ownership or cancel the whole channel backlog |
+| Administrator | All channels and operations, transfer ownership, cancel backlog | Secret display in ordinary channel responses |
+
+Edit necessarily exposes the masked configuration needed for editing, even without View; View controls history independently. Send-only users see the channel's name/type and availability but receive an empty configuration and no diagnostic errors. Existing administrator-only webhook body-template restrictions still apply. Only administrators can transfer ownership or set the owner to **Administrators**. Access changes are recorded as `channel.access` in the administrator audit log, without credentials.
+
+New routes belong to their creator; only that creator and administrators can edit/delete them or rotate their webhook key. Choosing primary **and fallback** recipients requires Send. A route key delegates sending through that route under its owner's current rights. Do not share route keys with untrusted callers. Existing and imported routes remain administrator-managed; changing a channel's owner does not revoke these existing system routes. An administrator must disable/remove such a route separately if it should stop.
+
+Send permission is rechecked at ingestion and when queued work is claimed, including fallback deliveries and personal alerts. If the route owner loses Send or their account becomes disabled/deleted, pending affected deliveries become `cancelled` and are not revived by granting access again. Requests already handed to a provider may complete. Deleted owners remain UUID tombstones; deletion never turns a personal channel/route into an unrestricted system resource. Administrators can recover orphaned channels by transferring ownership.
+
+History requires View for **all current and historical recipients** of the route, including fallbacks: event payloads, routing reports and grouped messages can describe several channels. Mixed private/shared routes are therefore hidden from history unless all destinations are readable. This also applies to attachments, metrics, tags and batch retries. A send-only route owner can configure their route but cannot read its stored event payloads. Personal alerts observe only readable routes and send only to authorized recipients. Global shared templates are readable/selectable by members, but their creation, modification, deletion and version restoration require an administrator because they can affect other users' private routes.
+
+### Channel access API
+
+- `GET /api/channels` returns only channels with at least one permission, with `permissions: {view, edit, send, manage, owner_user_id}`; administrators get all channels.
+- `GET /api/channels/{id}/access` returns ownership, grants and a minimal active-account directory to the channel owner/administrators.
+- `PUT /api/channels/{id}/access` atomically replaces `owner_user_id` and `grants`. Each grant has `user_id`, `can_view`, `can_edit`, `can_send`; at most 100 distinct users. An all-false grant removes access. Members must preserve the owner.
+- A full encrypted database backup preserves ownership and grants. Credential-free configuration import intentionally creates administrator-managed drafts, without copying user identities or grants between installations.

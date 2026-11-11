@@ -25,9 +25,10 @@ with sync_playwright() as p:
         username='controls-'+suffix
         users.append(ok(api.post('/api/users',data={'username':username,'display_name':'Controls member','role':'member','password':credentials['operator_password']}))['id'])
         channel=ok(api.post('/api/channels',data={'name':'090 UI channel','kind':'webhook','config':{'url':'http://mock:8000/ui090-'+suffix}}))['id'];channels.append(channel)
-        route=ok(api.post('/api/routes',data={'name':'090 UI route','channel_ids':[channel]}));routes.append(route['id'])
+        ok(api.put('/api/channels/'+channel+'/access',data={'owner_user_id':None,'grants':[{'user_id':users[0],'can_view':True,'can_edit':True,'can_send':True}]}))
         page.goto(BASE);page.get_by_label('Username',exact=True).fill(username);page.get_by_label('Password',exact=True).fill(credentials['operator_password']);page.get_by_role('button',name='Sign in',exact=True).click()
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
+        route=ok(page.request.post(BASE+'/api/routes',headers={'X-Relay-Client':'web'},data={'name':'090 UI route','channel_ids':[channel]}));routes.append(route['id'])
         nav('Channels');card=page.locator('.channel-entry').filter(has=page.get_by_text('090 UI channel',exact=True))
         card.get_by_role('button',name='Pause',exact=True).click();dialog=page.get_by_role('dialog',name='Pause channel',exact=True)
         dialog.get_by_label('Pause duration',exact=True).select_option('0');dialog.get_by_role('button',name='Pause channel',exact=True).click()

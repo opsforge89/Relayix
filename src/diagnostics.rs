@@ -208,7 +208,8 @@ pub async fn channel(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h,&s).await?;
+    access::channel(&s.db,&actor,id,"edit").await?;
     let c = sqlx::query_as::<_, Channel>("SELECT id,name,kind,config,enabled,manual_paused,manual_pause_until,created_at,secrets_encrypted FROM channels WHERE id=$1")
         .bind(id)
         .fetch_optional(&s.db)
@@ -231,6 +232,7 @@ pub async fn draft(
     let principal = auth::authenticated(&h, &s).await?;
     require_template_editor(&principal.role, &draft.config, None)?;
     if let Some(id) = draft.id {
+        access::channel(&s.db,&principal,id,"edit").await?;
         let old: Option<(Value, String, bool)> =
             sqlx::query_as("SELECT config,kind,secrets_encrypted FROM channels WHERE id=$1")
                 .bind(id)

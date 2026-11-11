@@ -62,6 +62,7 @@ try:
     member_name='queue-member-'+suffix
     member=ok('/api/users',{'username':member_name,'display_name':'Queue member','role':'member','password':credentials['operator_password']})['id'];users.append(member)
     owner=ok('/api/users',{'username':'queue-owner-'+suffix,'display_name':'Alert owner','role':'member','password':credentials['operator_password']})['id'];users.append(owner)
+    ok('/api/channels/'+channel+'/access',{'owner_user_id':None,'grants':[{'user_id':uid,'can_view':True,'can_edit':True,'can_send':True} for uid in [member,owner]]},method='PUT')
     status,_,member_session=session(member_name,credentials['operator_password']);assert status==200
     assert 'delivery_policy' not in ok('/api/routes/'+r['id']+'/preview',{'message':'Immediate preview'})['routing']
     before=ok('/api/events?route_id='+r['id'])['total']

@@ -99,7 +99,7 @@ pub(crate) async fn deliveries(
     h: HeaderMap,
     Query(mut filter): Query<DeliveryQuery>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h,&s).await?;
     normalize_delivery_filter(&mut filter)?;
     let page = filter.page.unwrap_or(1).clamp(1, 1000000);
     let page_size = filter.page_size.unwrap_or(50).clamp(1, 100);
@@ -108,7 +108,7 @@ pub(crate) async fn deliveries(
         .as_ref()
         .filter(|v| !v.is_empty())
         .map(|v| format!("%{v}%"));
-    let condition = DELIVERY_CONDITION;
+    let condition=format!("{DELIVERY_CONDITION} AND {}",access::route_scope(&actor,"e.route_id"));
     if filter.group_events.unwrap_or(false) {
         return delivery_groups::list(
             &s.db,
@@ -125,7 +125,7 @@ pub(crate) async fn deliveries(
     }
     let order = table::order("deliveries", &filter.sort)?;
     let mut count_sql = sqlx::QueryBuilder::<sqlx::Postgres>::new("SELECT COUNT(*)");
-    count_sql.push(condition);
+    count_sql.push(&condition);
     let (total,): (i64,) = count_sql
         .build_query_as::<(i64,)>()
         .bind(&filter.status)
@@ -141,7 +141,7 @@ pub(crate) async fn deliveries(
         .map_err(db_error)?;
     let mut rows_sql = sqlx::QueryBuilder::<sqlx::Postgres>::new(DELIVERY_SELECT);
     rows_sql
-        .push(condition)
+        .push(&condition)
         .push(order)
         .push(" LIMIT $9 OFFSET $10");
     let mut items = rows_sql
@@ -172,7 +172,8 @@ pub(crate) async fn retry(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    let actor=auth::authenticated(&h,&s).await?;
+    access::delivery(&s.db,&actor,id,true).await?;
     let result=sqlx::query("UPDATE deliveries SET status='queued',next_attempt_at=GREATEST(NOW(),not_before),locked_at=NULL,error=NULL,error_category=NULL,cycle_attempts=0,last_error_at=NULL,retry_generation=retry_generation+1 WHERE id=$1 AND (expires_at IS NULL OR expires_at>NOW()) AND (status='failed' OR (status='queued' AND error IS NOT NULL))").bind(id).execute(&s.db).await.map_err(db_error)?;
     if result.rows_affected() == 0 {
         return Err(err(

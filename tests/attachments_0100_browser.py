@@ -16,6 +16,7 @@ with sync_playwright() as p:
         username='file-browser-'+suffix
         user=ok(api.post('/api/users',data={'username':username,'display_name':'File browser','role':'member','password':credentials['operator_password']}))['id']
         channel=ok(api.post('/api/channels',data={'name':'File browser channel','kind':'mattermost','config':{'mode':'bot','url':'http://mock:8000','target':'channel','channel_id':'browserfiles','bot_token':credentials['mattermost_token']}}))['id']
+        ok(api.put('/api/channels/'+channel+'/access',data={'owner_user_id':None,'grants':[{'user_id':user,'can_view':True,'can_edit':False,'can_send':False}]}))
         route=ok(api.post('/api/routes',data={'name':'File browser '+suffix,'channel_ids':[channel]}))
         ok(api.post('/api/channels/'+channel+'/pause',data={}))
         accepted=ok(api.post(route['endpoint']+'/files',headers={'X-Relay-Key':route['token']},multipart={'payload':json.dumps({'title':'File history '+suffix,'message':'Preserved report'}),'files':{'name':'report.xlsx','mimeType':'application/octet-stream','buffer':blob}}))

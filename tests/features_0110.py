@@ -67,6 +67,7 @@ try:
     member = {'Authorization': '', 'Cookie': headers.get('Set-Cookie').split(';')[0]}
     assert request('/api/audit-log', headers=member)[0] == 403
     assert request('/api/security/storage', headers=member)[0] == 403
+    ok('/api/channels/'+channel+'/access',{'owner_user_id':None,'grants':[{'user_id':user,'can_view':True,'can_edit':True,'can_send':True}]},method='PUT')
     ok('/api/channels/' + channel + '/pause', {}, headers=member)
     r = route(channel, {'ttl_seconds': 2})
     first = send(r, {'X-Relay-TTL': '120', 'Idempotency-Key': suffix})

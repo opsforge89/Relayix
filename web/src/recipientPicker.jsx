@@ -5,7 +5,7 @@ import {ProviderIcon,integrations,channelMethod} from './integrations.jsx';
 export function RecipientPicker({label,channels,selected,onChange,excluded=[]}){
  const alertRecipients=label==='Alert recipients';
  const [open,setOpen]=useState(false),[tab,setTab]=useState('all'),[search,setSearch]=useState({all:'',selected:''}),[service,setService]=useState({all:'',selected:''});
- const available=channels.filter(c=>!excluded.includes(c.id)),chosen=available.filter(c=>selected.includes(c.id));
+ const available=channels.filter(c=>c.permissions?.send!==false&&!excluded.includes(c.id)),chosen=available.filter(c=>selected.includes(c.id));
  const options=available.filter(c=>(tab==='all'||selected.includes(c.id))&&(!service[tab]||c.kind===service[tab])&&c.name.toLocaleLowerCase().includes(search[tab].trim().toLocaleLowerCase()));
  const kinds=[...new Set(available.map(c=>c.kind))].sort((a,b)=>(integrations[a]?.label||a).localeCompare(integrations[b]?.label||b));
  const counts=kinds.map(kind=>[kind,chosen.filter(c=>c.kind===kind).length]).filter(([,count])=>count);

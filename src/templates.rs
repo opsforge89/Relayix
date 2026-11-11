@@ -327,7 +327,7 @@ pub async fn create(
     h: HeaderMap,
     Json(input): Json<Input>,
 ) -> ApiResult<Template> {
-    let user = auth::authenticated(&h, &s).await?;
+    let user = auth::require_admin(&h, &s).await?;
     validate(&input).map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let mut tx = s.db.begin().await.map_err(db_error)?;
     let template:Template=sqlx::query_as("INSERT INTO message_templates(id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id,name,title,body,link_label,link_url,link_failure_only,computed_status,passed_field,failed_field,version,created_at,updated_at").bind(Uuid::new_v4()).bind(input.name.trim()).bind(input.title).bind(input.body).bind(input.link_label).bind(input.link_url).bind(input.link_failure_only).bind(input.computed_status).bind(input.passed_field).bind(input.failed_field).fetch_one(&mut *tx).await.map_err(db_error)?;
@@ -352,7 +352,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(input): Json<Input>,
 ) -> ApiResult<Template> {
-    let user = auth::authenticated(&h, &s).await?;
+    let user = auth::require_admin(&h, &s).await?;
     replace(&s, id, input, &user.display_name).await
 }
 #[derive(Deserialize)]
@@ -390,7 +390,7 @@ pub async fn restore(
     h: HeaderMap,
     Path((id, version)): Path<(Uuid, i32)>,
 ) -> ApiResult<Template> {
-    let user = auth::authenticated(&h, &s).await?;
+    let user = auth::require_admin(&h, &s).await?;
     let snapshot: Option<Value> = sqlx::query_scalar(
         "SELECT snapshot FROM message_template_versions WHERE template_id=$1 AND version=$2",
     )
@@ -415,7 +415,7 @@ pub async fn delete(
     h: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Value> {
-    auth::authenticated(&h, &s).await?;
+    auth::require_admin(&h, &s).await?;
     sqlx::query("DELETE FROM message_templates WHERE id=$1")
         .bind(id)
         .execute(&s.db)
