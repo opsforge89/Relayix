@@ -31,6 +31,7 @@ class Deployment:
         self.container = container
         info = json.loads(self.command(['docker', 'inspect', container]))[0]
         self.image = info['Image']
+        self.app_environment = dict(item.split('=', 1) for item in info['Config']['Env'])
         self.running = info['State']['Running']
         self.network = next(iter(info['NetworkSettings']['Networks']))
         self.owned = set()
