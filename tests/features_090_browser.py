@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import os
+from resource_ui import menu_action
 import struct
 import time
 import uuid
@@ -30,23 +31,23 @@ with sync_playwright() as p:
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
         route=ok(page.request.post(BASE+'/api/routes',headers={'X-Relay-Client':'web'},data={'name':'090 UI route','channel_ids':[channel]}));routes.append(route['id'])
         nav('Channels');card=page.locator('.channel-entry').filter(has=page.get_by_text('090 UI channel',exact=True))
-        card.get_by_role('button',name='Pause',exact=True).click();dialog=page.get_by_role('dialog',name='Pause channel',exact=True)
+        menu_action(card, 'Pause').click();dialog=page.get_by_role('dialog',name='Pause channel',exact=True)
         dialog.get_by_label('Pause duration',exact=True).select_option('0');dialog.get_by_role('button',name='Pause channel',exact=True).click()
-        expect(card).to_contain_text('Paused manually');card.get_by_role('button',name='Resume',exact=True).click();page.get_by_role('dialog',name='Resume channel',exact=True).get_by_role('button',name='Resume channel',exact=True).click();expect(card).not_to_contain_text('Paused manually')
-        card.get_by_role('button',name='Pause',exact=True).click();page.get_by_role('dialog',name='Pause channel',exact=True).get_by_role('button',name='Pause channel',exact=True).click()
+        expect(card).to_contain_text('Paused manually');menu_action(card, 'Resume').click();page.get_by_role('dialog',name='Resume channel',exact=True).get_by_role('button',name='Resume channel',exact=True).click();expect(card).not_to_contain_text('Paused manually')
+        menu_action(card, 'Pause').click();page.get_by_role('dialog',name='Pause channel',exact=True).get_by_role('button',name='Pause channel',exact=True).click()
         pending=ok(api.post(route['endpoint'],data={'message':'Cancel UI backlog'},headers={'X-Relay-Key':route['token']}))
-        card.get_by_role('button',name='Resume',exact=True).click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
+        menu_action(card, 'Resume').click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
         expect(resume.get_by_role('option',name='Cancel all queued deliveries',exact=True)).to_have_count(0)
         expect(resume).to_contain_text('Only administrators can cancel queued messages')
         resume.get_by_role('button',name='Cancel',exact=True).click()
         assert ok(api.get('/api/deliveries?event_id='+pending['event_id']))['items'][0]['status']=='queued'
-        nav('Routes');page.get_by_role('button',name='Edit route 090 UI route',exact=True).click();editor=page.get_by_role('dialog',name='Edit route',exact=True)
+        nav('Routes');menu_action(page, 'Edit route 090 UI route').click();editor=page.get_by_role('dialog',name='Route details',exact=True)
         expect(editor).to_contain_text('including a unique one');editor.get_by_label('Quiet hours',exact=True).check();editor.get_by_label('Quiet-hours timezone',exact=True).fill('Europe/Moscow');editor.get_by_label('Deduplication window (seconds)',exact=True).fill('60');editor.get_by_label('Digest interval',exact=True).select_option('3600')
         editor.get_by_role('button',name='Save',exact=True).click();expect(editor).not_to_be_visible()
         saved=next(r for r in ok(api.get('/api/routes')) if r['id']==route['id'])
         assert saved['delivery_settings']['quiet_enabled'] and saved['delivery_settings']['dedup_seconds']==60 and saved['delivery_settings']['digest_seconds']==3600
-        row=page.locator('.route-row').filter(has=page.get_by_text('090 UI route',exact=True));row.get_by_role('button',name='Integration guide',exact=True).click()
-        guide=page.get_by_role('dialog',name='Route integration guide',exact=True)
+        row=page.locator('.route-row').filter(has=page.get_by_text('090 UI route',exact=True));menu_action(row, 'Integration guide').click()
+        guide=page.get_by_role('dialog',name='Route details',exact=True)
         guide.get_by_role('tab',name='Python',exact=True).click();expect(guide.get_by_label('python integration example')).to_contain_text('urllib.request');expect(guide.get_by_label('python integration example')).to_contain_text(route['slug'])
         guide.get_by_role('tab',name='Bash',exact=True).click();expect(guide.get_by_label('bash integration example')).to_contain_text('set -euo pipefail');guide.get_by_role('button',name='Close dialog',exact=True).click()
         nav('Settings');security=page.locator('.totp-settings');expect(security).to_contain_text('Two-factor authentication disabled')
@@ -72,7 +73,7 @@ with sync_playwright() as p:
         page.locator('.settings-actions').get_by_role('button',name='Sign out',exact=True).click()
         page.get_by_label('Username',exact=True).fill(administrator);page.get_by_label('Password',exact=True).fill(credentials['operator_password']);page.get_by_role('button',name='Sign in',exact=True).click()
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible();nav('Channels')
-        card.get_by_role('button',name='Resume',exact=True).click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
+        menu_action(card, 'Resume').click();resume=page.get_by_role('dialog',name='Resume channel',exact=True)
         expect(resume.get_by_role('status')).to_contain_text('3 messages in 2 queued deliveries')
         resume.get_by_label('Queued deliveries',exact=True).select_option('cancel');expect(resume).to_contain_text('every original message in grouped deliveries')
         resume.get_by_role('button',name='Cancel 3 messages and resume',exact=True).click();expect(resume).not_to_be_visible();expect(card).not_to_contain_text('Paused manually')

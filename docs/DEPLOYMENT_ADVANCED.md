@@ -16,7 +16,7 @@ Install Git, Docker Engine with Docker Compose v2, and Python 3.10+. Your user m
 git clone https://github.com/opsforge89/Relayix.git
 cd Relayix
 docker compose version
-docker pull ghcr.io/opsforge89/relayix:0.13.1
+docker pull ghcr.io/opsforge89/relayix:0.14.0
 ```
 
 This guide is for existing installations and automated deployments that use the private JSON wrapper. New users should follow the [standard Docker Compose setup](DEPLOYMENT.md). The published image is ready to run; source compilation is only needed for development.
