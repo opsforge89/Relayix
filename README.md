@@ -74,13 +74,13 @@ Keep your `.env` and database volume. Migrations run automatically. For upgrades
 
 ## Preview
 
-Current interface, captured from the verified 0.14.0 Beta runtime with fictional demonstration data.
+Current interface, captured from the verified 0.14.1 Beta runtime with fictional demonstration data.
 
 ![Relayix dashboard with compact Channels and Routes lists, delivery metrics and recent history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
 
 ![Compact channel list with status indicators, action menus and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
 
-![Compact routes with recipients, status indicators and action menus — light theme](docs/screenshots/relayix-routes-light.png)
+![Routes with horizontally aligned names, recipients, status and action menus — light theme](docs/screenshots/relayix-routes-light.png)
 
 <details>
 <summary>Channel and route details</summary>
