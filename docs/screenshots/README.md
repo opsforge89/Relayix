@@ -1,6 +1,6 @@
 # Interface screenshots
 
-These eight PNGs were captured from the verified Relayix **0.14.0 Beta** candidate, commit [`563af308deb057fb6486d9439004b24c40e21491`](https://github.com/opsforge89/Relayix/commit/563af308deb057fb6486d9439004b24c40e21491), during [the complete candidate verification](https://github.com/opsforge89/Relayix/actions/runs/43196085278) on 2026-11-12.
+These eight PNGs were captured from the verified Relayix **0.14.1 Beta** candidate, commit [`f3ee705de860deb34d2e225d65150e0379ef3107`](https://github.com/opsforge89/Relayix/commit/f3ee705de860deb34d2e225d65150e0379ef3107), during [the complete candidate verification](https://github.com/opsforge89/Relayix/actions/runs/43209387966) on 2026-11-12.
 
 `tests/readme_capture.py` creates an isolated temporary deployment, seeds fictional destinations, routes, notifications and an account, then captures the actual Chromium interface. It runs only in GitHub Actions as part of the single pre-publication verification pipeline. The browser viewport is 1680 × 1100 CSS pixels; full-page screenshots can be taller. The dashboard and resource overview drawers use the dark theme; other views use the light theme.
 
