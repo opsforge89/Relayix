@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.0 Beta — 2026-11-11
+## 0.13.0 Beta — 2026-11-12
 
 - Make new channels private to their creator and add independent View, Edit and Send grants with owner/admin access management and administrator-only ownership transfer. Administrators always retain full access.
 - Keep legacy and imported channels/routes administrator-managed without changing existing webhook keys or delivery destinations.
@@ -8,6 +8,7 @@
 - Scope history, attachments, tags, metrics, retries and personal alert monitoring to authorized resources; protect mixed-recipient event data from disclosure.
 - Restrict changes to globally shared message templates to administrators so template edits cannot modify another account's private deliveries.
 - Add channel sharing and read-only settings dialogs, cross-account API regressions and Chromium permission tests.
+- Wrap channel actions on the dashboard and channel list so access controls stay within mobile screens.
 
 ## 0.12.0 Beta — 2026-11-11
 
