@@ -1,4 +1,4 @@
-import React,{useEffect,useId,useRef,useState} from 'react';
+import React,{useLayoutEffect,useId,useRef,useState} from 'react';
 import {MoreVertical,Send,Activity,Pause,Play,Pencil,Trash2,CopyPlus,KeyRound,Copy,Users} from 'lucide-react';
 import {Dialog,ErrorMessage,RouteUsageContent} from './ui.jsx';
 import {ChannelAccessForm} from './channelAccess.jsx';
@@ -11,13 +11,17 @@ import {manuallyPaused} from './deliveryControls.jsx';
 export function ActionMenu({label,items}) {
  const [open,setOpen]=useState(false),[position,setPosition]=useState({});
  const ref=useRef(null),trigger=useRef(null),menu=useRef(null),id=useId();
- useEffect(()=>{
+ useLayoutEffect(()=>{
   if(!open)return;
-  const rect=trigger.current.getBoundingClientRect(),height=menu.current.offsetHeight;
-  setPosition({left:Math.max(8,Math.min(rect.right-220,window.innerWidth-228)),top:rect.bottom+height+8>window.innerHeight?Math.max(8,rect.top-height-4):rect.bottom+4});
+  const place=()=>{
+   const rect=trigger.current.getBoundingClientRect(),height=menu.current.offsetHeight;
+   if(rect.bottom<0||rect.top>window.innerHeight){setOpen(false);return}
+   setPosition({left:Math.max(8,Math.min(rect.right-220,window.innerWidth-228)),top:rect.bottom+height+8>window.innerHeight?Math.max(8,rect.top-height-4):rect.bottom+4});
+  };
+  place();
   menu.current.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
   const outside=e=>{if(!ref.current?.contains(e.target))setOpen(false)};
-  const scroll=e=>{if(!menu.current?.contains(e.target))setOpen(false)};
+  const scroll=e=>{if(!menu.current?.contains(e.target))place()};
   document.addEventListener('pointerdown',outside);window.addEventListener('resize',scroll);window.addEventListener('scroll',scroll,true);
   return()=>{document.removeEventListener('pointerdown',outside);window.removeEventListener('resize',scroll);window.removeEventListener('scroll',scroll,true)};
  },[open]);
