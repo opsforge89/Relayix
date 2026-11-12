@@ -18,6 +18,18 @@ with sync_playwright() as p:
     def ok(response):
         assert response.ok, response.text()
         return response.json()
+    def expect_viewport_width():
+        bounds = page.evaluate('''() => ({
+            width: document.documentElement.scrollWidth,
+            viewport: window.innerWidth,
+            elements: [...document.querySelectorAll('body *')].map(element => {
+                const box = element.getBoundingClientRect();
+                return {tag: element.tagName, className: element.getAttribute('class'), right: box.right, width: box.width};
+            }).filter(box => box.right > window.innerWidth + 1).slice(0, 12)
+        })''')
+        if bounds['width'] > bounds['viewport']:
+            page.screenshot(path=str(OUT / 'resource-layout-overflow.png'), full_page=True)
+        assert bounds['width'] <= bounds['viewport'], bounds
     channels, routes = [], []
     preferences = None
     suffix = uuid.uuid4().hex[:12]
@@ -55,7 +67,7 @@ with sync_playwright() as p:
             long_row = scope.locator('.route-row').filter(has=page.get_by_role('button', name=long_name, exact=True))
             expect(long_row.locator('.route-more')).to_have_text('+1')
             expect(long_row.locator('.recipient-badge')).to_have_count(3)
-            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            expect_viewport_width()
         inline_routes(dashboard)
         expect(dashboard.locator('.endpoint')).to_have_count(0)
         expect(dashboard.get_by_role('button', name='Edit', exact=True)).to_have_count(0)
@@ -132,7 +144,7 @@ with sync_playwright() as p:
                 mobile = page.get_by_role('dialog', name=title, exact=True)
                 expect(mobile).to_be_visible()
                 assert mobile.bounding_box()['width'] <= 390
-                assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                expect_viewport_width()
                 mobile.get_by_role('button', name='Close dialog', exact=True).click()
             page.set_viewport_size({'width': 1680, 'height': 1100})
         assert not errors, errors
