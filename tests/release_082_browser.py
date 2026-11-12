@@ -5,6 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
+from resource_ui import menu_action
 from playwright.sync_api import sync_playwright,expect
 from runtime import credentials
 BASE=os.environ['RELAYIX_TEST_BASE_URL']
@@ -65,15 +66,15 @@ with sync_playwright() as p:
    editor.get_by_role('button',name='Save template',exact=True).click()
   copy_template=ok(copied.value);templates.append(copy_template['id']);assert copy_template['version']==1
   nav('Routes')
-  page.get_by_role('button',name='Edit route 082 UI route',exact=True).click()
-  route_editor=page.get_by_role('dialog',name='Edit route',exact=True)
+  menu_action(page, 'Edit route 082 UI route').click()
+  route_editor=page.get_by_role('dialog',name='Route details',exact=True)
   route_editor.get_by_role('button',name='Use test results rules',exact=True).click()
   expect(route_editor.get_by_label('Validation field 1',exact=True)).to_have_value('suite')
   expect(route_editor.get_by_label('Validation minimum 2',exact=True)).to_have_value('0')
   route_editor.get_by_label('Message template (optional)',exact=True).select_option(template['id'])
   page.screenshot(path=str(OUT/'082-route-validation.png'),full_page=True)
   route_editor.get_by_role('button',name='Save',exact=True).click();expect(route_editor).not_to_be_visible()
-  page.get_by_role('button',name='Clone route 082 UI route',exact=True).click()
+  menu_action(page, 'Clone route 082 UI route').click()
   clone_editor=page.get_by_role('dialog',name='Add route',exact=True)
   expect(clone_editor.get_by_label('Name',exact=True)).to_have_value('082 UI route copy')
   expect(clone_editor.get_by_label('Validation field 3',exact=True)).to_have_value('failed')

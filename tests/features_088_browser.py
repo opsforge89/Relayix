@@ -1,5 +1,6 @@
 """Preview formatting, truncation and cooldown visibility in the channel and route UI."""
 import os
+from resource_ui import menu_action
 import uuid
 from playwright.sync_api import sync_playwright,expect
 from runtime import credentials
@@ -25,8 +26,8 @@ with sync_playwright() as p:
         page.get_by_label('Username',exact=True).fill('admin');page.get_by_label('Password',exact=True).fill(credentials['admin_password']);page.get_by_role('button',name='Sign in',exact=True).click()
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
         page.locator('nav').get_by_role('button',name='Channels',exact=True).click()
-        page.locator('.channel-entry').filter(has=page.get_by_text('088 UI Rocket.Chat',exact=True)).get_by_role('button',name='Edit',exact=True).click()
-        editor=page.get_by_role('dialog',name='Edit channel',exact=True)
+        menu_action(page.locator('.channel-entry').filter(has=page.get_by_text('088 UI Rocket.Chat',exact=True)), 'Edit').click()
+        editor=page.get_by_role('dialog',name='Channel details',exact=True)
         expect(editor.get_by_label('Message limits')).to_contain_text('5,000')
         editor.locator('summary').filter(has_text='Preview a message').click()
         editor.get_by_label('Preview message',exact=True).fill('a'*9000)
@@ -39,7 +40,7 @@ with sync_playwright() as p:
         expect(editor.get_by_label('Outgoing message')).to_contain_text('Short preview')
         editor.get_by_role('button',name='Cancel',exact=True).click()
         page.locator('nav').get_by_role('button',name='Routes',exact=True).click()
-        page.get_by_role('button',name='Test webhook 088 UI preview',exact=True).click()
+        menu_action(page, 'Test webhook 088 UI preview').click()
         tester=page.get_by_role('dialog',name='Test webhook',exact=True)
         tester.get_by_label('Test message',exact=True).fill('a'*9000)
         tester.get_by_role('button',name='Preview routing and messages',exact=True).click()

@@ -1,5 +1,8 @@
 # User and API reference
 
+Channel and route lists show names, recipients and status with secondary actions in the `⋯` menu. Select a name to open a drawer without leaving the dashboard or list. Channel details include Overview, Settings and owner/admin Access tabs according to your independent permissions; view-only settings remain masked and read-only. Route details include Overview, editable Settings for route managers and Integration with the permanent endpoint, code examples and key rotation. Tests and confirmed deletion retain their existing behavior. Escape closes the topmost menu or dialog and returns focus to its trigger. On mobile, resource drawers use the full viewport width.
+
+
 [Quick start](../README.md) · [Database setup](DEPLOYMENT.md)
 
 ## Incoming events and delivery operations

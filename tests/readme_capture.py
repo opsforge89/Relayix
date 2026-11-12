@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from resource_ui import menu_action
 import secrets
 import socket
 import subprocess
@@ -88,8 +89,8 @@ def browser_capture():
         editor.get_by_role('button', name='Cancel', exact=True).click()
         print('README capture: routes', flush=True)
         nav('Routes')
-        page.get_by_role('button', name='Edit route Night-time operations', exact=True).click()
-        dialog = page.get_by_role('dialog', name='Edit route', exact=True)
+        menu_action(page, 'Edit route Night-time operations').click()
+        dialog = page.get_by_role('dialog', name='Route details', exact=True)
         dialog.get_by_label('Message TTL (seconds)', exact=True).scroll_into_view_if_needed()
         expect(dialog.get_by_label('Message TTL (seconds)', exact=True)).to_have_value('86400')
         page.screenshot(path=str(output / 'readme-route-controls-light.png'), full_page=True, animations='disabled')

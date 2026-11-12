@@ -3,6 +3,7 @@ import json
 import os
 import uuid
 from pathlib import Path
+from resource_ui import menu_action
 from playwright.sync_api import sync_playwright,expect
 from runtime import credentials
 
@@ -27,8 +28,8 @@ with sync_playwright() as p:
         page.get_by_label('Username',exact=True).fill('admin');page.get_by_label('Password',exact=True).fill(credentials['admin_password']);page.get_by_role('button',name='Sign in',exact=True).click()
         expect(page.get_by_role('heading',name='Dashboard',exact=True)).to_be_visible()
         nav('Channels')
-        page.locator('.channel-entry').filter(has=page.get_by_text('087 UI webhook body',exact=True)).get_by_role('button',name='Edit',exact=True).click()
-        editor=page.get_by_role('dialog',name='Edit channel',exact=True)
+        menu_action(page.locator('.channel-entry').filter(has=page.get_by_text('087 UI webhook body',exact=True)), 'Edit').click()
+        editor=page.get_by_role('dialog',name='Channel details',exact=True)
         editor.get_by_label('JSON body template (optional)',exact=True).fill('{invalid')
         editor.get_by_role('button',name='Save',exact=True).click();expect(editor).to_be_visible()
         body={'text':'{{message}}','severity':'{{priority}}'}
@@ -38,8 +39,8 @@ with sync_playwright() as p:
         ok(saved.value);expect(editor).not_to_be_visible()
         assert next(c for c in ok(api.get('/api/channels')) if c['id']==channel)['config']['body_template']==body
         nav('Routes')
-        page.get_by_role('button',name='Edit route 087 UI rate limit',exact=True).click()
-        editor=page.get_by_role('dialog',name='Edit route',exact=True)
+        menu_action(page, 'Edit route 087 UI rate limit').click()
+        editor=page.get_by_role('dialog',name='Route details',exact=True)
         editor.get_by_label('Route rate limit per minute',exact=True).fill('3')
         with page.expect_response(lambda r:r.url.endswith('/api/routes/'+route['id']) and r.request.method=='PUT') as saved:
             editor.get_by_role('button',name='Save',exact=True).click()

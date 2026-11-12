@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.0 Beta — 2026-11-12
+
+- Keep dashboard channel and route lists compact with shared action menus and status indicators on the dashboard and dedicated pages.
+- Open channel and route details in the same side-drawer pattern as event history, retaining dashboard layout, filters and scroll position.
+- Reuse channel settings and access controls, and route settings and integration examples, as permission-aware drawer tabs. Preserve unsaved settings while switching tabs.
+- Keep tests, diagnostics, pause/resume, cloning, key rotation and confirmed deletion available without repeating action buttons on every row.
+- Cover resource drawers, keyboard menus and tabs, nested dialogs, read-only access and mobile layouts in Chromium.
+
 ## 0.13.1 Beta — 2026-11-12
 
 - Upgrade ESLint and its recommended JavaScript configuration together to 10.14.0 and 10.0.1, and update Lucide React to 1.70.0.
