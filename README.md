@@ -74,18 +74,29 @@ Keep your `.env` and database volume. Migrations run automatically. For upgrades
 
 ## Preview
 
-Current interface, captured from the verified 0.12.0 Beta runtime with fictional demonstration data.
+Current interface, captured from the verified 0.14.0 Beta runtime with fictional demonstration data.
 
-![Relayix dashboard with delivery metrics, channels, routes and delivery history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
+![Relayix dashboard with compact Channels and Routes lists, delivery metrics and recent history — dark theme](docs/screenshots/relayix-dashboard-dark.png)
 
-![Relayix channels, manual pause controls and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
+![Compact channel list with status indicators, action menus and available integrations — light theme](docs/screenshots/relayix-channels-light.png)
+
+![Compact routes with recipients, status indicators and action menus — light theme](docs/screenshots/relayix-routes-light.png)
+
+<details>
+<summary>Channel and route details</summary>
+
+![Channel overview drawer with status, permissions and Settings and Access tabs — dark theme](docs/screenshots/relayix-channel-details-dark.png)
+
+![Route overview drawer with recipients, delivery policy and Settings and Integration tabs — dark theme](docs/screenshots/relayix-route-details-dark.png)
+
+</details>
+
+<details>
+<summary>Templates, delivery timing and administrator audit</summary>
 
 ![Relayix template editor with categorized fields and a rendered notification preview — light theme](docs/screenshots/relayix-template-editor-light.png)
 
-<details>
-<summary>Delivery timing and administrator audit</summary>
-
-![Route message TTL and quiet-hours controls — light theme](docs/screenshots/relayix-route-controls-light.png)
+![Route Settings drawer with message TTL and quiet-hours controls — light theme](docs/screenshots/relayix-route-controls-light.png)
 
 ![Administrator audit log with account, route and channel actions — light theme](docs/screenshots/relayix-audit-light.png)
 
