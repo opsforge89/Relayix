@@ -81,6 +81,8 @@ with sync_playwright() as p:
         route_drawer.get_by_role('button', name='Test route', exact=True).click()
         tester = page.get_by_role('dialog', name='Test webhook', exact=True)
         expect(tester).to_be_visible()
+        tester.get_by_label('Test message', exact=True).click()
+        expect(tester.get_by_label('Test message', exact=True)).to_be_focused()
         page.keyboard.press('Escape')
         expect(tester).not_to_be_visible()
         expect(route_drawer).to_be_visible()
