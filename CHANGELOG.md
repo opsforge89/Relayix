@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1 Beta — 2026-11-12
+
+- Upgrade ESLint and its recommended JavaScript configuration together to 10.14.0 and 10.0.1, and update Lucide React to 1.70.0.
+- Update the locked uuid dependency to 1.29.2.
+- Upgrade GitHub Actions cache to v6, Node setup to v7 and artifact downloads to v8, retaining digest verification and promotion of the tested OCI image without rebuilding.
+
 ## 0.13.0 Beta — 2026-11-12
 
 - Make new channels private to their creator and add independent View, Edit and Send grants with owner/admin access management and administrator-only ownership transfer. Administrators always retain full access.
