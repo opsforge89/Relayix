@@ -157,8 +157,8 @@ html{scrollbar-gutter:stable}
 .resource-row .route-card-heading{align-items:center;gap:8px;margin-bottom:8px}
 .resource-row .route-name{min-width:0;gap:10px}
 .resource-route-copy{min-width:0;container:route-copy / inline-size}
-.route-layout{display:grid;gap:8px;min-width:0}
-.route-layout>.route-card-heading{margin-bottom:0}
+.route-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;min-width:0}
+.route-layout>.route-card-heading{margin-bottom:0;min-width:0}
 .route-flow-arrow{display:none;color:var(--muted)}
 .route-recipients{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
 .resource-row .route-recipients>.recipient-badges{flex:1 1 100%;order:0}
