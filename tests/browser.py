@@ -386,7 +386,7 @@ with sync_playwright() as p:
     page.get_by_role('dialog',name='Event details',exact=True).get_by_role('button',name='Close dialog',exact=True).click()
     filter_form.get_by_role('button', name='Reset filters', exact=True).click()
     expect(filter_form.get_by_label('Status', exact=True)).to_have_value('')
-    for name in ['Dashboard', 'Incoming webhooks', 'Deliveries', 'Failure alerts', 'Users']:
+    for name in ['Dashboard', 'Channels', 'Incoming webhooks', 'Deliveries', 'Failure alerts', 'Users']:
         page.set_viewport_size({'width': 390, 'height': 844})
         page.locator('nav').get_by_role('button', name=name, exact=True).click()
         page.wait_for_timeout(250)
