@@ -25,11 +25,15 @@ with sync_playwright() as p:
         ok(setup.post('/api/auth/login', data={'username': 'admin', 'password': credentials['admin_password']}))
         preferences = ok(setup.get('/api/auth/me'))['preferences']
         ok(setup.put('/api/auth/preferences', data={**preferences, 'list_search': '', 'route_tag_filter': '', 'refresh_interval_seconds': 0}))
-        for label in ['Tests', 'Deploy']:
+        for label in ['Tests', 'Deploy', 'Fallback', 'Alerts']:
             channel = ok(api.post('/api/channels', data={'name': label + ' drawer ' + suffix, 'kind': 'webhook', 'config': {'url': 'http://mock:8000/drawer-' + suffix}}))
             channels.append(channel['id'])
-            route = ok(api.post('/api/routes', data={'name': label + ' route ' + suffix, 'channel_ids': [channel['id']]}))
+        for label in ['Tests', 'Deploy']:
+            route = ok(api.post('/api/routes', data={'name': label + ' route ' + suffix, 'channel_ids': channels[:2]}))
             routes.append(route['id'])
+        long_name = 'Long route name that remains available through its full tooltip ' + suffix
+        overflow = ok(api.post('/api/routes', data={'name': long_name, 'channel_ids': channels, 'required_tag': 'release-operations'}))
+        routes.append(overflow['id'])
         page.goto(BASE)
         page.get_by_label('Username', exact=True).fill('admin')
         page.get_by_label('Password', exact=True).fill(credentials['admin_password'])
@@ -38,6 +42,21 @@ with sync_playwright() as p:
         expect(dashboard.locator('.panel')).to_have_count(2)
         panels = dashboard.locator('.panel')
         assert abs(panels.nth(0).bounding_box()['y'] - panels.nth(1).bounding_box()['y']) < 2
+        def inline_routes(scope):
+            for name in ['Tests route ' + suffix, 'Deploy route ' + suffix, long_name]:
+                row = scope.locator('.route-row').filter(has=page.get_by_role('button', name=name, exact=True))
+                expect(row.locator('.route-flow-arrow')).to_be_visible()
+                title = row.locator('.resource-name').bounding_box()
+                center = title['y'] + title['height'] / 2
+                for item in [*row.locator('.recipient-badge').all(), row.locator('.status'), row.locator('.resource-actions')]:
+                    box = item.bounding_box()
+                    assert abs(box['y'] + box['height'] / 2 - center) < 2, (name, title, box)
+                expect(row.locator('.resource-name')).to_have_attribute('title', name)
+            long_row = scope.locator('.route-row').filter(has=page.get_by_role('button', name=long_name, exact=True))
+            expect(long_row.locator('.route-more')).to_have_text('+1')
+            expect(long_row.locator('.recipient-badge')).to_have_count(3)
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+        inline_routes(dashboard)
         expect(dashboard.locator('.endpoint')).to_have_count(0)
         expect(dashboard.get_by_role('button', name='Edit', exact=True)).to_have_count(0)
         period = page.get_by_label('Dashboard period', exact=True).input_value()
@@ -73,7 +92,7 @@ with sync_playwright() as p:
         expect(drawer).not_to_be_visible()
         expect(channel_name).to_be_focused()
         assert page.get_by_label('Dashboard period', exact=True).input_value() == period
-        assert next(c for c in ok(api.get('/api/channels')) if c['id'] == channels[-1])['name'] == 'Deploy drawer ' + suffix
+        assert next(c for c in ok(api.get('/api/channels')) if c['id'] == channels[1])['name'] == 'Deploy drawer ' + suffix
         route_name = page.get_by_role('button', name='Deploy route ' + suffix, exact=True)
         route_name.click()
         route_drawer = page.get_by_role('dialog', name='Route details', exact=True)
@@ -93,9 +112,21 @@ with sync_playwright() as p:
         page.screenshot(path=str(OUT / 'route-integration-drawer.png'), full_page=True)
         page.mouse.click(10, 200)
         expect(route_drawer).not_to_be_visible()
+        page.locator('nav').get_by_role('button', name='Routes', exact=True).click()
+        for width in [1680, 1280]:
+            page.set_viewport_size({'width': width, 'height': 1100})
+            inline_routes(page.locator('.routes-list'))
+        page.screenshot(path=str(OUT / 'inline-route-recipients.png'), full_page=True)
+        page.locator('nav').get_by_role('button', name='Dashboard', exact=True).click()
+        page.set_viewport_size({'width': 1680, 'height': 1100})
         for theme in ['Light', 'Dark']:
             page.get_by_role('button', name=theme, exact=True).click()
             page.set_viewport_size({'width': 390, 'height': 844})
+            mobile_route = dashboard.locator('.route-row').filter(has=page.get_by_role('button', name='Deploy route ' + suffix, exact=True))
+            expect(mobile_route.locator('.route-flow-arrow')).not_to_be_visible()
+            route_title = mobile_route.locator('.resource-name').bounding_box()
+            recipients = mobile_route.locator('.recipient-badges').bounding_box()
+            assert recipients['y'] >= route_title['y'] + route_title['height']
             for name, title in [('Deploy drawer ' + suffix, 'Channel details'), ('Deploy route ' + suffix, 'Route details')]:
                 page.get_by_role('button', name=name, exact=True).click()
                 mobile = page.get_by_role('dialog', name=title, exact=True)
@@ -105,7 +136,7 @@ with sync_playwright() as p:
                 mobile.get_by_role('button', name='Close dialog', exact=True).click()
             page.set_viewport_size({'width': 1680, 'height': 1100})
         assert not errors, errors
-        print('PASS: shared resource drawers, stable dashboard context, retained drafts, keyboard menus/tabs, nested focus, Integration and full-width mobile panels')
+        print('PASS: inline route recipients with overflow summaries, stacked mobile rows, shared drawers, stable dashboard context, retained drafts, keyboard menus/tabs, nested focus and Integration')
     finally:
         for route in routes:
             api.delete('/api/routes/' + route)

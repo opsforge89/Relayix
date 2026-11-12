@@ -156,7 +156,23 @@ html{scrollbar-gutter:stable}
 .resource-row .status{font-size:10px;padding:4px 7px;white-space:nowrap}
 .resource-row .route-card-heading{align-items:center;gap:8px;margin-bottom:8px}
 .resource-row .route-name{min-width:0;gap:10px}
-.resource-route-copy{min-width:0}
+.resource-route-copy{min-width:0;container:route-copy / inline-size}
+.route-layout{display:grid;gap:8px;min-width:0}
+.route-layout>.route-card-heading{margin-bottom:0}
+.route-flow-arrow{display:none;color:var(--muted)}
+.route-recipients{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-width:0}
+.resource-row .route-recipients>.recipient-badges{flex:1 1 100%;order:0}
+.route-more{flex:none;color:var(--muted);font-size:11px;white-space:nowrap}
+@container route-copy (min-width:400px){
+ .route-layout{grid-template-columns:160px 16px minmax(0,1fr);align-items:center;gap:10px}
+ .route-flow-arrow{display:block}
+ .route-recipients{flex-wrap:nowrap}
+ .resource-row .route-recipients>.recipient-badges{flex:1 1 auto;flex-wrap:nowrap}
+ .route-recipients .recipient-badge{flex:0 1 auto;overflow:hidden}
+ .route-recipients .recipient-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .route-recipients .recipient-copy small{display:none}
+ .route-recipients .route-tag{flex:0 1 auto;max-width:90px;min-width:0;overflow:hidden;white-space:nowrap}
+}
 .resource-row .route-symbol{width:30px;height:30px;border-radius:8px}
 .resource-row .recipient-badges{gap:5px;min-width:0}
 .resource-row .recipient-badge{min-width:0;max-width:100%;padding:4px 7px;gap:5px}

@@ -9,12 +9,12 @@ export function RecipientBadges({ids,channels}) {
   const channel=channels.find(c=>c.id===id);
   if(!channel)return <span className="recipient-badge muted" key={id}>Removed channel</span>;
   const method=channelMethod(channel);
-  return <span className={`recipient-badge ${channel.enabled?'':'recipient-disabled'}`} key={id} data-kind={channel.kind} aria-label={`Recipient ${channel.name}, ${method}`}><ProviderIcon kind={channel.kind}/><span className="recipient-copy"><strong>{channel.name}</strong><small>{method}{channel.enabled?'':' · Disabled'}</small></span></span>;
+  return <span className={`recipient-badge ${channel.enabled?'':'recipient-disabled'}`} key={id} data-kind={channel.kind} title={`${channel.name} · ${method}${channel.enabled?'':' · Disabled'}`} aria-label={`Recipient ${channel.name}, ${method}`}><ProviderIcon kind={channel.kind}/><span className="recipient-copy"><strong>{channel.name}</strong><small>{method}{channel.enabled?'':' · Disabled'}</small></span></span>;
  })}{!ids.length&&<span className="muted">No recipients selected</span>}</div>;
 }
 export function RouteTag({tag,onClick}) {
  if(!tag)return null;
- return onClick?<button type="button" className="chip tag-chip route-tag" aria-label={`Filter tag ${tag}`} onClick={()=>onClick(tag)}><Tag size={12}/>{tag}</button>:<span className="chip route-tag"><Tag size={12}/>{tag}</span>;
+ return onClick?<button type="button" className="chip tag-chip route-tag" title={tag} aria-label={`Filter tag ${tag}`} onClick={()=>onClick(tag)}><Tag size={12}/>{tag}</button>:<span className="chip route-tag" title={tag}><Tag size={12}/>{tag}</span>;
 }
 export function RouteTagFilter({label,routes,value,onChange}) {
  const values=[...new Set(routes.map(r=>r.required_tag).filter(Boolean))].sort();

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 Beta — 2026-11-12
+
+- Align route names, recipient badges, status and action menus on one horizontal row when the list has enough room, with a subtle route-to-recipient arrow. Keep recipients below names in narrow lists.
+- Use the route content width for the layout transition on both the dashboard and Routes page; retain full names and connection methods in tooltips and summarize extra recipients with +N.
+- Cover horizontal alignment, long names, recipient overflow and narrow layouts in Chromium.
+
 ## 0.14.0 Beta — 2026-11-12
 
 - Keep dashboard channel and route lists compact with shared action menus and status indicators on the dashboard and dedicated pages.
