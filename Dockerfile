@@ -1,4 +1,4 @@
-FROM node:26.13.0-trixie-slim AS web-builder
+FROM node:26.13.1-trixie-slim AS web-builder
 WORKDIR /web
 COPY Cargo.toml /Cargo.toml
 COPY web/package*.json ./
